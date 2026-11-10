@@ -227,20 +227,52 @@ async function renderAdmin() {
   const box = $("#admin");
   try {
     const players = await rpc("nfl_admin_players", { p_token: token() });
+    const paidCount = players.filter((p) => p.paid).length;
     box.innerHTML = `
-      <h2>Commissioner · Paid</h2>
+      <h2>Commissioner · Settings</h2>
+      <div class="card">
+        <label for="s-venmo">Venmo handle</label>
+        <input type="text" id="s-venmo" autocapitalize="none" value="${esc(settings.venmo_handle)}">
+        <label for="s-fee">Entry fee ($)</label>
+        <input type="text" id="s-fee" inputmode="decimal" value="${esc(settings.entry_fee)}">
+        <label for="s-invite">Group password (new players need it to join)</label>
+        <input type="text" id="s-invite" autocomplete="off" autocapitalize="none" placeholder="Leave blank to keep the current one">
+        <button class="btn" id="s-save" type="button">Save settings</button>
+      </div>
+
+      <h2>Commissioner · Paid (${paidCount} of ${players.length})</h2>
       <p class="hint">Check each player off once their $${esc(settings.entry_fee)} Venmo arrives.</p>
       <div class="card">${players.map((p) => `
         <label class="paidrow">
           <input type="checkbox" data-name="${esc(p.name)}" ${p.paid ? "checked" : ""}>
           <span>${esc(p.name)} <span class="hint">@${esc(p.venmo)}</span></span>
         </label>`).join("")}</div>`;
+
     box.querySelectorAll("input[type=checkbox]").forEach((cb) => cb.onchange = async () => {
       try {
         await rpc("nfl_set_paid", { p_token: token(), p_name: cb.dataset.name, p_paid: cb.checked });
+        renderAdmin();
       } catch (err) { cb.checked = !cb.checked; flash(err.message, false, "#msg2"); }
     });
+    $("#s-save").onclick = saveSettings;
   } catch (err) { box.innerHTML = ""; }
+}
+
+// Saves whichever settings changed. Blank group password = keep the current one.
+async function saveSettings() {
+  const t = token();
+  const venmo = $("#s-venmo").value.trim();
+  const fee = $("#s-fee").value.trim();
+  const invite = $("#s-invite").value.trim();
+  try {
+    if (venmo !== settings.venmo_handle) await rpc("nfl_admin_set_config", { p_token: t, p_key: "venmo_handle", p_value: venmo });
+    if (fee !== settings.entry_fee) await rpc("nfl_admin_set_config", { p_token: t, p_key: "entry_fee", p_value: fee });
+    if (invite) await rpc("nfl_admin_set_config", { p_token: t, p_key: "invite", p_value: invite });
+    const s = await rpc("nfl_settings");
+    if (s && s[0]) settings = s[0];
+    flash("Settings saved.", true, "#msg2");
+    renderAdmin();
+  } catch (err) { flash(err.message, false, "#msg2"); }
 }
 
 // ---------- Wire up ----------
