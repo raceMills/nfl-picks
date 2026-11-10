@@ -109,10 +109,19 @@ const fmtKick = (g) => new Date(g.start_at).toLocaleString("en-US", {
   weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago"
 }) + " CT";
 
+// The line that applies to a game: the locked line once lines lock. Games from before
+// line locking keep the line they always had.
+// Games with a lock time show no line until it locks, so nobody sees a line that may still move.
+const lineOf = (g) => (g.line_locked ? g.locked_spread_home : g.picks_open_at ? null : g.spread_home);
+const lineNum = (g) => {
+  const v = lineOf(g);
+  return v === null || v === undefined || v === "" ? NaN : Number(v);
+};
+
 // Spread text from the favourite's point of view.
 function spreadText(g) {
-  const s = Number(g.spread_home);
-  if (g.spread_home === null || isNaN(s)) return "No line yet";
+  const s = lineNum(g);
+  if (isNaN(s)) return g.line_locked || !g.picks_open_at ? "Line not posted yet" : "Line locks Tue 12 PM CT";
   if (s === 0) return "Pick 'em";
   return s < 0 ? `${g.home} -${Math.abs(s)}` : `${g.away} -${Math.abs(s)}`;
 }
@@ -123,8 +132,8 @@ const setPlain = (on) => { try { localStorage.setItem("nfl-plain", on ? "1" : "0
 
 // One sentence for the game, from the favourite's point of view.
 function plainSpread(g) {
-  const s = Number(g.spread_home);
-  if (g.spread_home === null || isNaN(s)) return "No line yet";
+  const s = lineNum(g);
+  if (isNaN(s)) return "Line not posted yet";
   if (s === 0) return "Pick 'em: the winner gets the pick";
   const fav = s < 0 ? g.home : g.away;
   return `${fav} must win by more than ${Math.abs(s)} to cover`;
@@ -132,8 +141,8 @@ function plainSpread(g) {
 
 // Small label under a team button in plain mode.
 function plainSide(g, side) {
-  const s = Number(g.spread_home);
-  if (g.spread_home === null || isNaN(s) || s === 0) return "";
+  const s = lineNum(g);
+  if (isNaN(s) || s === 0) return "";
   const m = Math.abs(s);
   const isFav = (side === "home") === (s < 0);
   return isFav ? `Needs to win by more than ${m}` : `Wins, or loses by less than ${m}`;
@@ -141,8 +150,9 @@ function plainSide(g, side) {
 
 // Which side covered: returns "home", "away", "push", or null if not final.
 function covered(g) {
-  if (g.status !== "final" || g.home_score == null || g.away_score == null || g.spread_home == null) return null;
-  const margin = Number(g.home_score) - Number(g.away_score) + Number(g.spread_home);
+  const line = lineNum(g);
+  if (g.status !== "final" || g.home_score == null || g.away_score == null || isNaN(line)) return null;
+  const margin = Number(g.home_score) - Number(g.away_score) + line;
   if (margin === 0) return "push";
   return margin > 0 ? "home" : "away";
 }
@@ -233,7 +243,7 @@ async function render() {
       </div>`;
 
     const pickRows = wg.map((g) => {
-      const lock = started(g) || !me.paid;
+      const lock = started(g) || !me.paid || !g.line_locked;
       const pick = myPicks[g.id];
       const score = g.status === "final" || g.status === "in_progress"
         ? `<div class="score">${esc(g.away)} ${g.away_score ?? 0} – ${esc(g.home)} ${g.home_score ?? 0}${g.status === "final" ? " (final)" : ""}</div>`
@@ -241,7 +251,13 @@ async function render() {
       const reveal = revealHtml(g);
       const wxLine = g.weather ? `<div class="wx">☁️ ${esc(g.weather)}</div>` : "";
       // Filled in by updateLive() every 30 seconds while a game is on
-      const liveBox = `<div class="live" data-gid="${esc(g.id)}" data-spread="${g.spread_home ?? ""}" data-pick="${pick || ""}"></div>`;
+      const liveBox = `<div class="live" data-gid="${esc(g.id)}" data-spread="${lineOf(g) ?? ""}" data-pick="${pick || ""}"></div>`;
+      // Before the line locks, say when picks open
+      const lineNote = !g.line_locked && !started(g)
+        ? `<div class="kick">${g.picks_open_at && Date.now() < Date.parse(g.picks_open_at)
+            ? `Lines lock ${fmtKick({ start_at: g.picks_open_at })}`
+            : "Waiting for a line to post"}</div>`
+        : "";
       const plain = plainOn();
       const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${pick === side ? "🌭 " : ""}${esc(abbr)}${plain && plainSide(g, side) ? `<small>${esc(plainSide(g, side))}</small>` : ""}</button>`;
       return `<div class="game" data-gid="${esc(g.id)}" data-lock="${lock ? 1 : 0}">
@@ -249,6 +265,7 @@ async function render() {
         <div class="teams">${btn("away", g.away)}<span>@</span>${btn("home", g.home)}</div>
         ${wxLine}
         ${score}
+        ${lineNote}
         ${liveBox}
         ${reveal}
       </div>`;

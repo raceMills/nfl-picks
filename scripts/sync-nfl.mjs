@@ -47,6 +47,32 @@ const numOrNull = (v) => (v === null || v === undefined || v === "" ? null : Num
 // ESPN state: pre = scheduled, in = in progress, post = final.
 const statusOf = (state) => (state === "post" ? "final" : state === "in" ? "in_progress" : "scheduled");
 
+// Central-time pieces of a moment: weekday, year, month, day, hour.
+const ctFmt = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Chicago", weekday: "short", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", hourCycle: "h23",
+});
+function ctParts(d) {
+  const o = {};
+  for (const p of ctFmt.formatToParts(d)) o[p.type] = p.value;
+  return o;
+}
+
+// The most recent Tuesday 12:00 Central at or before kickoff. Picks open and lines lock then.
+function lockTimeFor(startIso) {
+  const start = new Date(startIso).getTime();
+  for (let k = 0; k < 8; k++) {
+    const probe = new Date(start - k * 86400e3);
+    const p = ctParts(probe);
+    if (p.weekday !== "Tue") continue;
+    // Noon UTC on that calendar day, then shift so it reads 12:00 in Central
+    let t = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), 12);
+    const hourAtGuess = Number(ctParts(new Date(t)).hour);
+    t -= (hourAtGuess - 12) * 3600e3;
+    if (t <= start) return new Date(t).toISOString();
+  }
+  return null;
+}
+
 function gameRow(ev, week) {
   const c = ev.competitions[0];
   const home = c.competitors.find((t) => t.homeAway === "home");
@@ -56,7 +82,9 @@ function gameRow(ev, week) {
 
   // The posted line is for the favorite. Store it from the home team's point of view.
   let spreadHome = null;
-  const parsed = parseOddsDetails((c.odds || [])[0]?.details);
+  const details = ((c.odds || [])[0]?.details || "").trim();
+  if (details.toUpperCase() === "PK") spreadHome = 0; // a pick'em line
+  const parsed = parseOddsDetails(details);
   if (parsed) {
     if (parsed.team === hAbbr) spreadHome = parsed.line;
     else if (parsed.team === aAbbr) spreadHome = -parsed.line;
@@ -74,8 +102,29 @@ function gameRow(ev, week) {
     status: statusOf(ev.status?.type?.state),
     // ESPN gives a short forecast (e.g. "Clear, 41°F") for outdoor games; null for domes
     weather: c.weather?.displayValue || null,
+    picks_open_at: lockTimeFor(ev.date),
     updated_at: now(),
   };
+}
+
+// Locks the line for each game whose Tuesday noon has passed and that hasn't kicked off.
+// The line is whatever we last saw at that moment, so it doesn't move after lock.
+async function lockLines() {
+  const nowIso = encodeURIComponent(now());
+  const q = `${SB_URL}/rest/v1/nfl_games?select=id,spread_home&line_locked=eq.false` +
+    `&spread_home=not.is.null&picks_open_at=lte.${nowIso}&start_at=gt.${nowIso}`;
+  const r = await fetch(q, { headers: { apikey: SB_KEY, authorization: `Bearer ${SB_KEY}` } });
+  if (!r.ok) throw new Error(`lock read HTTP ${r.status}`);
+  const rows = await r.json();
+  for (const g of rows) {
+    const p = await fetch(`${SB_URL}/rest/v1/nfl_games?id=eq.${encodeURIComponent(g.id)}`, {
+      method: "PATCH",
+      headers: { apikey: SB_KEY, authorization: `Bearer ${SB_KEY}`, "content-type": "application/json", prefer: "return=minimal" },
+      body: JSON.stringify({ line_locked: true, locked_spread_home: g.spread_home }),
+    });
+    if (!p.ok) throw new Error(`lock write HTTP ${p.status}`);
+  }
+  console.log(`lines: locked ${rows.length} new`);
 }
 
 // How many games we already have per week, and how many of them are final.
@@ -148,6 +197,12 @@ try {
   await syncGames();
 } catch (err) {
   console.error("games failed:", err.message);
+  process.exitCode = 1;
+}
+try {
+  await lockLines();
+} catch (err) {
+  console.error("lines failed:", err.message);
   process.exitCode = 1;
 }
 try {
