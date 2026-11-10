@@ -337,7 +337,7 @@ async function submitSurvivor(week, team) {
 }
 
 // ---------- Tabs: Picks, Payouts, News ----------
-const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payouts"], ["news", "News"]];
+const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payouts"], ["news", "News"], ["chat", "Chat"]];
 function tabsHtml() {
   return `<nav class="tabs">${VIEWS.map(([k, l]) => `<button type="button" data-view="${k}" class="${view === k ? "on" : ""}">${l}</button>`).join("")}</nav>`;
 }
@@ -352,12 +352,72 @@ async function renderSection() {
   try {
     body = view === "payouts" ? await payoutsHtml()
       : view === "standings" ? await standingsHtml()
+      : view === "chat" ? await chatHtml()
       : await newsHtml();
   }
   catch (err) { body = `<p class="err">${esc(err.message)}</p>`; }
-  $("#home-body").innerHTML = header + `<div>${body}</div>`;
+  $("#home-body").innerHTML = header + `<div id="msg2"></div><div>${body}</div>`;
   $("#logout").onclick = logOut;
   bindTabs();
+  if (view === "chat") bindChat();
+}
+
+// ---------- Pool chat ----------
+const fmtChatTime = (iso) => new Date(iso).toLocaleString("en-US", {
+  weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago"
+});
+
+async function chatHtml() {
+  return `
+    <h2>Pool chat</h2>
+    <div class="card">
+      <div id="chat-list"><p class="hint">Loading…</p></div>
+      <form id="chat-form" class="chatform">
+        <input type="text" id="chat-in" maxlength="500" placeholder="Say something…" autocomplete="off">
+        <button class="btn" type="submit">Send</button>
+      </form>
+      <p class="hint">Be nice. The commissioner can delete any message.</p>
+    </div>`;
+}
+
+function bindChat() {
+  $("#chat-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const input = $("#chat-in");
+    const body = input.value.trim();
+    if (!body) return;
+    try {
+      await rpc("nfl_chat_post", { p_token: token(), p_body: body });
+      input.value = "";
+      loadChat();
+    } catch (err) { flash(err.message, false, "#msg2"); }
+  };
+  loadChat();
+}
+
+async function loadChat() {
+  const box = $("#chat-list");
+  if (!box) return;
+  try {
+    const rows = await rpc("nfl_chat_list", { p_token: token() });
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+    box.innerHTML = rows.map((m) => `
+      <div class="msg ${m.is_mine ? "mine" : ""}">
+        <div class="meta"><b>${esc(m.player)}</b> <span class="hint">${fmtChatTime(m.created_at)}</span>
+          ${m.can_delete ? `<button class="linkbtn tiny" data-del="${m.id}" type="button">Delete</button>` : ""}</div>
+        <div>${esc(m.body)}</div>
+      </div>`).join("") || `<p class="hint">No messages yet. Say hi 👋</p>`;
+    if (atBottom) box.scrollTop = box.scrollHeight;
+    box.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => deleteMsg(b.dataset.del));
+  } catch (err) { box.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+}
+
+async function deleteMsg(id) {
+  if (!confirm("Delete this message?")) return;
+  try {
+    await rpc("nfl_chat_delete", { p_token: token(), p_id: Number(id) });
+    loadChat();
+  } catch (err) { flash(err.message, false, "#msg2"); }
 }
 
 // Best-guess payouts: a flat amount for each week's pick'em winner, and a bigger survivor prize.
@@ -740,6 +800,10 @@ document.addEventListener("DOMContentLoaded", () => {
   init();
   // Keep the lock countdowns current while the app is open
   setInterval(() => { if (me && !$("#home").hidden && !document.hidden) render(); }, 60000);
+  // Chat refreshes every 20 seconds while it's open
+  setInterval(() => {
+    if (me && view === "chat" && !$("#home").hidden && !document.hidden) loadChat();
+  }, 20000);
   // Live scores every 30 seconds, updating only the covering lines on the page
   setInterval(() => {
     if (me && view === "picks" && !$("#home").hidden && !document.hidden) refreshLive().then(updateLive);
