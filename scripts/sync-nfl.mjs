@@ -76,13 +76,48 @@ function gameRow(ev, week) {
   };
 }
 
+// How many games we already have per week, and how many of them are final.
+async function existingWeeks() {
+  const r = await fetch(`${SB_URL}/rest/v1/nfl_games?select=week,status&limit=10000`, {
+    headers: { apikey: SB_KEY, authorization: `Bearer ${SB_KEY}` },
+  });
+  if (!r.ok) throw new Error(`nfl_games read HTTP ${r.status}`);
+  const have = {};
+  for (const g of await r.json()) {
+    have[g.week] ??= { total: 0, final: 0 };
+    have[g.week].total++;
+    if (g.status === "final") have[g.week].final++;
+  }
+  return have;
+}
+
+// Loads every regular-season week from week 1 to now. Weeks already complete in the
+// database are skipped; the current week and any unfinished week are refreshed each run.
 async function syncGames() {
   const board = await getJson(`${ESPN}/scoreboard`);
-  const week = board.week?.number;
-  if (!week) throw new Error("ESPN scoreboard had no week number");
-  const rows = (board.events || []).map((ev) => gameRow(ev, week));
-  const n = await upsert("nfl_games", rows, "id");
-  console.log(`games: wrote ${n} for week ${week}`);
+  const current = board.week?.number;
+  if (!current) throw new Error("ESPN scoreboard had no week number");
+
+  const have = await existingWeeks();
+  const weeks = [];
+  for (let w = 1; w <= 18; w++) {
+    const h = have[w];
+    const complete = h && h.total > 0 && h.final === h.total;
+    if (!complete || w >= current) weeks.push(w);
+  }
+
+  let total = 0;
+  for (const w of weeks) {
+    try {
+      const data = await getJson(`${ESPN}/scoreboard?seasontype=2&week=${w}`);
+      const rows = (data.events || []).map((ev) => gameRow(ev, w));
+      total += await upsert("nfl_games", rows, "id");
+      console.log(`games: week ${w} -> ${rows.length} games`);
+    } catch (err) {
+      console.error(`games: week ${w} failed: ${err.message}`);
+    }
+  }
+  console.log(`games: wrote ${total} across ${weeks.length} weeks (current week ${current})`);
 }
 
 async function syncNews() {
