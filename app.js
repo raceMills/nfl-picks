@@ -727,9 +727,36 @@ async function standingsHtml() {
     else { r.l++; r.streak = r.streak < 0 ? r.streak - 1 : -1; }
   }
   const standings = Object.entries(rec).sort((a, b) => b[1].w - a[1].w || a[1].l - b[1].l);
+  // Trophy case: earned from the finished weeks so far
+  const trophies = {};
+  const addTrophy = (name, icon) => {
+    trophies[name] = trophies[name] || {};
+    trophies[name][icon] = (trophies[name][icon] || 0) + 1;
+  };
+  for (const w of finalWeeks) {
+    const wk = weekWinners(w, all, picks);
+    if (wk.best > 0) wk.names.forEach((n) => addTrophy(n, "🏆"));
+    const tb = tiebreakWinner(w, all, tbs);
+    if (tb) tb.names.forEach((n) => addTrophy(n, "🥇"));
+    // Perfect week: every decided pick right, with at least three picks
+    const byPlayer = {};
+    for (const p of picks) {
+      const g = all.find((x) => x.id === p.game_id);
+      const c = g && g.week === w && covered(g);
+      if (!c || c === "push") continue;
+      (byPlayer[p.player] = byPlayer[p.player] || []).push(c === p.side);
+    }
+    for (const [pl, results] of Object.entries(byPlayer)) {
+      if (results.length >= 3 && results.every(Boolean)) addTrophy(pl, "🎯");
+    }
+  }
+  const trophyText = (name) => trophies[name]
+    ? Object.entries(trophies[name]).map(([icon, n]) => `${icon}${n > 1 ? `×${n}` : ""}`).join(" ")
+    : "";
+
   const streakTag = (s) => s >= 3 ? ` 🔥 ${s} in a row` : s <= -3 ? ` ❄️ ${-s} losing` : "";
   const standingRows = standings.map(([name, r], i) => `
-    <div class="srow"><span>${i + 1}. ${nameHtml(name)}</span><b>${r.w}-${r.l}${r.p ? `-${r.p}` : ""}</b><span class="hint">${streakTag(r.streak)}</span></div>`).join("")
+    <div class="srow"><span>${i + 1}. ${nameHtml(name)}</span><b>${r.w}-${r.l}${r.p ? `-${r.p}` : ""}</b><span class="hint">${streakTag(r.streak)} ${trophyText(name)}</span></div>`).join("")
     || `<p class="hint">No decided picks yet.</p>`;
 
   // Last finished week's recap
@@ -776,7 +803,9 @@ async function standingsHtml() {
 
   return `
     <h2>Pick'em standings</h2>
-    <div class="card">${standingRows}</div>
+    <div class="card">${standingRows}
+      <p class="hint">🏆 weekly winner · 🥇 tiebreaker · 🎯 perfect week (3+ picks) · 🔥 3+ in a row</p>
+    </div>
     <h2>This week's leader</h2>
     <div class="card">${recap}</div>
     <h2>Survivor</h2>
