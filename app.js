@@ -61,7 +61,10 @@ async function init() {
     } catch (e) { /* fall through to login */ }
   }
   clearToken();
-  showGate("login");
+  // An invite link opens the join form with the code already filled in
+  const inv = new URLSearchParams(location.search).get("invite");
+  if (inv) $("#j-invite").value = inv;
+  showGate(inv ? "join" : "login");
 }
 
 // ---------- Log in / sign up ----------
@@ -814,6 +817,65 @@ async function standingsHtml() {
     <div class="card">${myRows}</div>`;
 }
 
+// ---------- Commissioner: invite links ----------
+const inviteUrl = (code) => `${location.origin}${location.pathname}?invite=${code}`;
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    flash("Link copied.", true, "#msg2");
+  } catch (e) {
+    flash("Couldn't copy. Press and hold the link to copy it.", false, "#msg2");
+  }
+}
+
+function showInvite(code) {
+  const url = inviteUrl(code);
+  $("#inv-out").innerHTML = `
+    <div class="invbox">${esc(url)}</div>
+    <div class="invbtns">
+      <button class="btn" id="inv-share" type="button">Share</button>
+      <button class="btn" id="inv-copy" type="button">Copy</button>
+    </div>`;
+  $("#inv-share").onclick = async () => {
+    const text = `Join my NFL pick'em pool: ${url}`;
+    if (navigator.share) {
+      try { await navigator.share({ title: "Hotdawgs NFL Pool", text, url }); } catch (e) { /* cancelled */ }
+    } else {
+      copyText(url);
+    }
+  };
+  $("#inv-copy").onclick = () => copyText(url);
+}
+
+async function makeInvite() {
+  try {
+    const code = await rpc("nfl_create_invite", { p_token: token() });
+    showInvite(code);
+    loadInvites();
+  } catch (err) { flash(err.message, false, "#msg2"); }
+}
+
+async function loadInvites() {
+  const box = $("#inv-list");
+  if (!box) return;
+  try {
+    const rows = await rpc("nfl_list_invites", { p_token: token() });
+    box.innerHTML = rows.length
+      ? rows.map((r) => `<div class="srow"><span class="hint">${r.uses} of ${r.max_uses} used · until ${fmtChatTime(r.expires_at)}</span><button class="linkbtn tiny" data-code="${esc(r.code)}" type="button">Turn off</button></div>`).join("")
+      : `<p class="hint">No active invite links.</p>`;
+    box.querySelectorAll("[data-code]").forEach((b) => b.onclick = () => revokeInvite(b.dataset.code));
+  } catch (err) { box.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+}
+
+async function revokeInvite(code) {
+  if (!confirm("Turn off this invite link?")) return;
+  try {
+    await rpc("nfl_revoke_invite", { p_token: token(), p_code: code });
+    loadInvites();
+  } catch (err) { flash(err.message, false, "#msg2"); }
+}
+
 // ---------- Commissioner: export and audit log ----------
 async function exportCsv() {
   try {
@@ -882,10 +944,19 @@ async function renderAdmin() {
     });
     $("#s-save").onclick = saveSettings;
     $("#csv-btn").onclick = exportCsv;
+    $("#inv-make").onclick = makeInvite;
+    loadInvites();
 
     // Recent commissioner activity
     const log = await rpc("nfl_admin_audit", { p_token: token() });
     box.insertAdjacentHTML("beforeend", `
+      <h2>Invite players</h2>
+      <div class="card">
+        <p class="hint">Makes a link that lasts 7 days and works for up to 10 sign-ups. New players fill in the join form for you.</p>
+        <button class="btn" id="inv-make" type="button">Create invite link</button>
+        <div id="inv-out"></div>
+        <div id="inv-list"><p class="hint">Loading…</p></div>
+      </div>
       <h2>Commissioner · Activity</h2>
       <div class="card">${log.map((a) => `<div class="srow"><span class="hint">${new Date(a.logged_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" })}</span><span>${esc(a.actor)} ${esc(a.action)}${a.detail ? `: ${esc(a.detail)}` : ""}</span></div>`).join("") || `<p class="hint">No activity yet.</p>`}</div>`);
   } catch (err) { box.innerHTML = ""; }
