@@ -72,6 +72,8 @@ function gameRow(ev, week) {
     home_score: numOrNull(home.score),
     away_score: numOrNull(away.score),
     status: statusOf(ev.status?.type?.state),
+    // ESPN gives a short forecast (e.g. "Clear, 41°F") for outdoor games; null for domes
+    weather: c.weather?.displayValue || null,
     updated_at: now(),
   };
 }

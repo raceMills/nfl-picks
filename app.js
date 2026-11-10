@@ -24,7 +24,7 @@ async function rpc(fn, args) {
 }
 
 let me = null;
-let settings = { venmo_handle: "", entry_fee: "", weekly_prize: "0", survivor_prize: "0", season_start_week: 1, test_season: false, paid_count: 0 };
+let settings = { venmo_handle: "", entry_fee: "", weekly_prize: "0", survivor_prize: "0", season_start_week: 1, test_season: false, paid_count: 0, announcement: "" };
 let view = "picks"; // picks | payouts | news
 
 // ---------- Screens ----------
@@ -188,10 +188,11 @@ async function render() {
     if (!still.length) { clearToken(); return location.reload(); }
     if (view !== "picks") return renderSection();
 
-    const [games, picks, surv] = await Promise.all([
+    const [games, picks, surv, tbs] = await Promise.all([
       sb.from("nfl_games").select("*").order("start_at"),
       rpc("nfl_picks_visible", { p_token: t }),
-      rpc("nfl_survivor_visible", { p_token: t })
+      rpc("nfl_survivor_visible", { p_token: t }),
+      rpc("nfl_tiebreak_visible", { p_token: t })
     ]);
     if (games.error) throw games.error;
 
@@ -208,9 +209,12 @@ async function render() {
     // After kickoff, show who took each side (others only; yours is on the button)
     const revealHtml = (g) => {
       if (!started(g)) return "";
-      const rows = picks.filter((p) => p.game_id === g.id && p.player !== me.name);
-      const names = (side) => rows.filter((p) => p.side === side).map((p) => esc(p.player)).join(", ") || "nobody else";
-      return `<div class="reveal">Locked. ${esc(g.away)}: ${names("away")} · ${esc(g.home)}: ${names("home")}</div>`;
+      const all = picks.filter((p) => p.game_id === g.id);
+      const others = all.filter((p) => p.player !== me.name);
+      const names = (side) => others.filter((p) => p.side === side).map((p) => esc(p.player)).join(", ") || "nobody else";
+      // Share of the group on each side, counting your own pick too
+      const pct = (side) => all.length ? Math.round(100 * all.filter((p) => p.side === side).length / all.length) : 0;
+      return `<div class="reveal">Locked. ${esc(g.away)} ${pct("away")}% (${names("away")}) · ${esc(g.home)} ${pct("home")}% (${names("home")})</div>`;
     };
 
     // Record across every final game you picked
@@ -235,11 +239,13 @@ async function render() {
         ? `<div class="score">${esc(g.away)} ${g.away_score ?? 0} – ${esc(g.home)} ${g.home_score ?? 0}${g.status === "final" ? " (final)" : ""}</div>`
         : started(g) ? "" : `<div class="kick">Locks in ${fmtLeft(Date.parse(g.start_at) - Date.now())} · ${fmtKick(g)}</div>`;
       const reveal = revealHtml(g);
+      const wxLine = g.weather ? `<div class="wx">☁️ ${esc(g.weather)}</div>` : "";
       const plain = plainOn();
       const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${pick === side ? "🌭 " : ""}${esc(abbr)}${plain && plainSide(g, side) ? `<small>${esc(plainSide(g, side))}</small>` : ""}</button>`;
       return `<div class="game" data-gid="${esc(g.id)}" data-lock="${lock ? 1 : 0}">
         <div class="spread">${esc(plain ? plainSpread(g) : spreadText(g))}</div>
         <div class="teams">${btn("away", g.away)}<span>@</span>${btn("home", g.home)}</div>
+        ${wxLine}
         ${score}
         ${reveal}
       </div>`;
@@ -260,6 +266,7 @@ async function render() {
       </header>
       ${tabsHtml()}
       ${payBox}
+      ${settings.announcement ? `<div class="card ann"><b>📣 From the commissioner</b><p class="hint">${esc(settings.announcement)}</p></div>` : ""}
       <div id="msg2"></div>
       ${seenHowTo() ? "" : `<div class="card howto">
         <b>How it works</b>
@@ -273,6 +280,7 @@ async function render() {
       <label class="toggle"><input type="checkbox" id="plain-toggle" ${plainOn() ? "checked" : ""}> Plain-English spreads</label>
       <p class="hint">Pick the side that covers the spread.</p>
       ${pickRows}
+      ${tiebreakHtml(wg, tbs, week)}
       <h2>Week ${esc(week)} · Survivor</h2>
       <p class="hint">One team per week. You can't reuse a team. ${survThisWeek ? `This week: <b>${esc(survThisWeek)}</b>` : "No team picked yet."}</p>
       <div class="teamgrid">${survRows}</div>
@@ -280,6 +288,7 @@ async function render() {
 
     $("#logout").onclick = logOut;
     bindTabs();
+    if ($("#tb-save")) $("#tb-save").onclick = () => saveTiebreak(week);
     $("#plain-toggle").onchange = (e) => { setPlain(e.target.checked); render(); };
     if ($("#howto-ok")) $("#howto-ok").onclick = () => { setHowTo(); render(); };
     document.querySelectorAll(".game[data-lock='0']").forEach(attachSwipe);
@@ -307,7 +316,7 @@ async function submitSurvivor(week, team) {
 }
 
 // ---------- Tabs: Picks, Payouts, News ----------
-const VIEWS = [["picks", "Picks"], ["payouts", "Payouts"], ["news", "News"]];
+const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payouts"], ["news", "News"]];
 function tabsHtml() {
   return `<nav class="tabs">${VIEWS.map(([k, l]) => `<button type="button" data-view="${k}" class="${view === k ? "on" : ""}">${l}</button>`).join("")}</nav>`;
 }
@@ -319,7 +328,11 @@ function bindTabs() {
 async function renderSection() {
   const header = `<header class="top"><div><h1>🌭 Hotdawgs NFL Pool</h1><p class="hint">Hi ${esc(me.name)}</p></div><button class="linkbtn" id="logout">Log out</button></header>${tabsHtml()}`;
   let body;
-  try { body = view === "payouts" ? await payoutsHtml() : await newsHtml(); }
+  try {
+    body = view === "payouts" ? await payoutsHtml()
+      : view === "standings" ? await standingsHtml()
+      : await newsHtml();
+  }
   catch (err) { body = `<p class="err">${esc(err.message)}</p>`; }
   $("#home-body").innerHTML = header + `<div>${body}</div>`;
   $("#logout").onclick = logOut;
@@ -394,6 +407,189 @@ async function newsHtml() {
   return `<h2>Injuries & news</h2>${items}`;
 }
 
+// ---------- Shared helpers for results ----------
+// What happened to a team's game: "win", "loss", "push", or null if not final yet.
+function teamResult(g, team) {
+  if (g.status !== "final" || g.home_score == null || g.away_score == null) return null;
+  const hs = Number(g.home_score), as = Number(g.away_score);
+  if (hs === as) return "push";
+  return (hs > as ? g.home : g.away) === team ? "win" : "loss";
+}
+
+// Weekly pick'em winners for one week: most correct picks, ties share.
+function weekWinners(w, all, picks) {
+  const wg = all.filter((g) => g.week === w);
+  const tally = {};
+  for (const p of picks) {
+    const g = wg.find((x) => x.id === p.game_id);
+    const c = g && covered(g);
+    if (!c) continue;
+    tally[p.player] = tally[p.player] || 0;
+    if (c !== "push" && c === p.side) tally[p.player]++;
+  }
+  const best = Math.max(0, ...Object.values(tally));
+  const names = Object.keys(tally).filter((n) => tally[n] === best && best > 0);
+  return { best, names, done: wg.length > 0 && wg.every((g) => g.status === "final") };
+}
+
+// Monday night tiebreaker: who guessed closest to the last game's total.
+function tiebreakWinner(w, all, tbs) {
+  const wg = all.filter((g) => g.week === w);
+  const last = wg.slice().sort((a, b) => Date.parse(b.start_at) - Date.parse(a.start_at))[0];
+  if (!last || last.status !== "final") return null;
+  const total = Number(last.home_score) + Number(last.away_score);
+  const guesses = tbs.filter((t) => t.week === w);
+  if (!guesses.length) return null;
+  const closest = Math.min(...guesses.map((t) => Math.abs(t.points - total)));
+  const names = guesses.filter((t) => Math.abs(t.points - total) === closest).map((t) => t.player);
+  return { total, names, last };
+}
+
+// ---------- Monday night tiebreaker card (picks screen) ----------
+function tiebreakHtml(wg, tbs, week) {
+  const last = wg.slice().sort((a, b) => Date.parse(b.start_at) - Date.parse(a.start_at))[0];
+  if (!last) return "";
+  const mine = tbs.find((t) => t.player === me.name && t.week === week);
+  const locked = started(last);
+  // Other players' guesses show once the last game kicks off
+  const others = locked ? tbs.filter((t) => t.week === week && t.player !== me.name) : [];
+  const othersLine = others.length
+    ? `<p class="hint">Guesses: ${others.map((t) => `${esc(t.player)} ${t.points}`).join(" · ")}</p>` : "";
+  return `
+    <h2>Monday tiebreaker</h2>
+    <div class="card">
+      <p class="hint">Guess the combined final score of ${esc(last.away)} @ ${esc(last.home)}. The closest guess wins ties.</p>
+      ${locked
+        ? `<p><b>Locked.</b> Your guess: ${mine ? mine.points : "none"}</p>${othersLine}`
+        : `<div class="tbrow">
+             <input type="text" inputmode="numeric" id="tb-pts" placeholder="Total points" value="${mine ? mine.points : ""}">
+             <button class="btn" id="tb-save" type="button">Save</button>
+           </div>`}
+    </div>`;
+}
+
+async function saveTiebreak(week) {
+  const v = $("#tb-pts").value.trim();
+  if (v === "") return flash("Enter a total first.", false, "#msg2");
+  try {
+    await rpc("nfl_set_tiebreak", { p_token: token(), p_week: week, p_points: Number(v) });
+    render();
+  } catch (err) { flash(err.message, false, "#msg2"); }
+}
+
+// ---------- Standings: season record, streaks, survivor alive list, recap, my picks ----------
+async function standingsHtml() {
+  const [games, picks, surv, tbs] = await Promise.all([
+    sb.from("nfl_games").select("*").order("start_at"),
+    rpc("nfl_picks_visible", { p_token: token() }),
+    rpc("nfl_survivor_visible", { p_token: token() }),
+    rpc("nfl_tiebreak_visible", { p_token: token() })
+  ]);
+  if (games.error) throw games.error;
+  const all = games.data;
+  const start = Number(settings.season_start_week) || 1;
+  const weeks = [...new Set(all.map((g) => g.week))].filter((w) => w >= start).sort((a, b) => a - b);
+  const finalWeeks = weeks.filter((w) => all.filter((g) => g.week === w).every((g) => g.status === "final"));
+
+  // Pick'em record and current streak, in game order
+  const rec = {};
+  const decided = picks
+    .map((p) => ({ p, g: all.find((x) => x.id === p.game_id) }))
+    .filter((x) => x.g && covered(x.g))
+    .sort((a, b) => Date.parse(a.g.start_at) - Date.parse(b.g.start_at));
+  for (const { p, g } of decided) {
+    const r = (rec[p.player] = rec[p.player] || { w: 0, l: 0, p: 0, streak: 0 });
+    const c = covered(g);
+    if (c === "push") { r.p++; r.streak = 0; }
+    else if (c === p.side) { r.w++; r.streak = r.streak > 0 ? r.streak + 1 : 1; }
+    else { r.l++; r.streak = r.streak < 0 ? r.streak - 1 : -1; }
+  }
+  const standings = Object.entries(rec).sort((a, b) => b[1].w - a[1].w || a[1].l - b[1].l);
+  const streakTag = (s) => s >= 3 ? ` 🔥 ${s} in a row` : s <= -3 ? ` ❄️ ${-s} losing` : "";
+  const standingRows = standings.map(([name, r], i) => `
+    <div class="srow"><span>${i + 1}. ${esc(name)}</span><b>${r.w}-${r.l}${r.p ? `-${r.p}` : ""}</b><span class="hint">${streakTag(r.streak)}</span></div>`).join("")
+    || `<p class="hint">No decided picks yet.</p>`;
+
+  // Last finished week's recap
+  const lastDone = finalWeeks[finalWeeks.length - 1];
+  let recap = `<p class="hint">No finished week yet.</p>`;
+  if (lastDone) {
+    const wk = weekWinners(lastDone, all, picks);
+    const tb = tiebreakWinner(lastDone, all, tbs);
+    recap = `<p><b>Week ${lastDone}:</b> ${wk.names.length ? `${wk.names.map(esc).join(", ")} with ${wk.best} right` : "no picks scored"}</p>
+      ${tb ? `<p class="hint">Tiebreaker: ${tb.names.map(esc).join(", ")} (total ${tb.total})</p>` : ""}`;
+  }
+
+  // Survivor: alive players, and when everyone else went out
+  const survPlayers = [...new Set(surv.map((s) => s.player))];
+  const survStatus = {};
+  for (const pl of survPlayers) {
+    let alive = true, outWeek = null;
+    for (const w of finalWeeks) {
+      const pick = surv.find((s) => s.player === pl && s.week === w);
+      const g = pick && all.find((x) => x.week === w && (x.home === pick.team || x.away === pick.team));
+      const res = pick && g ? teamResult(g, pick.team) : null;
+      if (res !== "win") { alive = false; outWeek = w; break; }
+    }
+    survStatus[pl] = { alive, outWeek };
+  }
+  const alive = survPlayers.filter((pl) => survStatus[pl].alive);
+  const out = survPlayers.filter((pl) => !survStatus[pl].alive);
+  const survRow = (pl, text) => `<div class="srow"><span>${esc(pl)}</span><span class="hint">${text}</span></div>`;
+  const survHtml = survPlayers.length
+    ? `<div class="card"><p><b>Alive (${alive.length})</b></p>${alive.map((pl) => survRow(pl, "still in")).join("") || `<p class="hint">Nobody left.</p>`}
+       <p><b>Out (${out.length})</b></p>${out.map((pl) => survRow(pl, `out in week ${survStatus[pl].outWeek}`)).join("")}</div>`
+    : `<p class="hint">No survivor picks yet.</p>`;
+
+  // My picks, most recent first
+  const myRows = decided
+    .filter((x) => x.p.player === me.name)
+    .reverse()
+    .map(({ p, g }) => {
+      const c = covered(g);
+      const res = c === "push" ? "push" : c === p.side ? "✅ win" : "❌ loss";
+      const pick = p.side === "home" ? g.home : g.away;
+      return `<div class="srow"><span>Wk ${g.week} · ${esc(pick)}</span><span class="hint">${esc(g.away)} @ ${esc(g.home)}</span><b>${res}</b></div>`;
+    }).join("") || `<p class="hint">No decided picks yet.</p>`;
+
+  return `
+    <h2>Pick'em standings</h2>
+    <div class="card">${standingRows}</div>
+    <h2>This week's leader</h2>
+    <div class="card">${recap}</div>
+    <h2>Survivor</h2>
+    ${survHtml}
+    <h2>My picks</h2>
+    <div class="card">${myRows}</div>`;
+}
+
+// ---------- Commissioner: export and audit log ----------
+async function exportCsv() {
+  try {
+    const [games, picks, surv] = await Promise.all([
+      sb.from("nfl_games").select("*"),
+      rpc("nfl_picks_visible", { p_token: token() }),
+      rpc("nfl_survivor_visible", { p_token: token() })
+    ]);
+    if (games.error) throw games.error;
+    const gm = Object.fromEntries(games.data.map((g) => [g.id, g]));
+    const rows = [["week", "player", "game", "pick", "result"]];
+    for (const p of picks) {
+      const g = gm[p.game_id];
+      if (!g) continue;
+      const c = covered(g);
+      const result = !c ? "" : c === "push" ? "push" : c === p.side ? "win" : "loss";
+      rows.push([g.week, p.player, `${g.away} @ ${g.home}`, p.side === "home" ? g.home : g.away, result]);
+    }
+    for (const s of surv) rows.push([s.week, s.player, "survivor", s.team, ""]);
+    const csv = rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = "nfl-pool-picks.csv";
+    a.click();
+  } catch (err) { flash(err.message, false, "#msg2"); }
+}
+
 // ---------- Commissioner: who has paid ----------
 async function renderAdmin() {
   const box = $("#admin");
@@ -411,6 +607,8 @@ async function renderAdmin() {
         <input type="text" id="s-weekly" inputmode="decimal" value="${esc(settings.weekly_prize)}">
         <label for="s-survivor">Survivor prize ($)</label>
         <input type="text" id="s-survivor" inputmode="decimal" value="${esc(settings.survivor_prize)}">
+        <label for="s-ann">Announcement (shown to everyone, 280 characters max)</label>
+        <input type="text" id="s-ann" value="${esc(settings.announcement)}">
         <label for="s-invite">Group password (new players need it to join)</label>
         <input type="text" id="s-invite" autocomplete="off" autocapitalize="none" placeholder="Leave blank to keep the current one">
         <button class="btn" id="s-save" type="button">Save settings</button>
@@ -418,6 +616,7 @@ async function renderAdmin() {
 
       <h2>Commissioner · Paid (${paidCount} of ${players.length})</h2>
       <p class="hint">Check each player off once their $${esc(settings.entry_fee)} Venmo arrives.</p>
+      <button class="btn" id="csv-btn" type="button">Download picks (CSV)</button>
       <div class="card">${players.map((p) => `
         <label class="paidrow">
           <input type="checkbox" data-name="${esc(p.name)}" ${p.paid ? "checked" : ""}>
@@ -431,6 +630,13 @@ async function renderAdmin() {
       } catch (err) { cb.checked = !cb.checked; flash(err.message, false, "#msg2"); }
     });
     $("#s-save").onclick = saveSettings;
+    $("#csv-btn").onclick = exportCsv;
+
+    // Recent commissioner activity
+    const log = await rpc("nfl_admin_audit", { p_token: token() });
+    box.insertAdjacentHTML("beforeend", `
+      <h2>Commissioner · Activity</h2>
+      <div class="card">${log.map((a) => `<div class="srow"><span class="hint">${new Date(a.logged_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" })}</span><span>${esc(a.actor)} ${esc(a.action)}${a.detail ? `: ${esc(a.detail)}` : ""}</span></div>`).join("") || `<p class="hint">No activity yet.</p>`}</div>`);
   } catch (err) { box.innerHTML = ""; }
 }
 
@@ -442,7 +648,9 @@ async function saveSettings() {
   const invite = $("#s-invite").value.trim();
   const weekly = $("#s-weekly").value.trim();
   const survivor = $("#s-survivor").value.trim();
+  const ann = $("#s-ann").value.trim();
   try {
+    if (ann !== settings.announcement) await rpc("nfl_admin_set_config", { p_token: t, p_key: "announcement", p_value: ann });
     if (venmo !== settings.venmo_handle) await rpc("nfl_admin_set_config", { p_token: t, p_key: "venmo_handle", p_value: venmo });
     if (fee !== settings.entry_fee) await rpc("nfl_admin_set_config", { p_token: t, p_key: "entry_fee", p_value: fee });
     if (weekly !== settings.weekly_prize) await rpc("nfl_admin_set_config", { p_token: t, p_key: "weekly_prize", p_value: weekly });
