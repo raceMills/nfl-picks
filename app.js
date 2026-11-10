@@ -111,6 +111,28 @@ function spreadText(g) {
   return s < 0 ? `${g.home} -${Math.abs(s)}` : `${g.away} -${Math.abs(s)}`;
 }
 
+// Plain-English option (off by default). Saved on this phone.
+const plainOn = () => { try { return localStorage.getItem("nfl-plain") === "1"; } catch (e) { return false; } };
+const setPlain = (on) => { try { localStorage.setItem("nfl-plain", on ? "1" : "0"); } catch (e) {} };
+
+// One sentence for the game, from the favourite's point of view.
+function plainSpread(g) {
+  const s = Number(g.spread_home);
+  if (g.spread_home === null || isNaN(s)) return "No line yet";
+  if (s === 0) return "Pick 'em: the winner gets the pick";
+  const fav = s < 0 ? g.home : g.away;
+  return `${fav} must win by more than ${Math.abs(s)} to cover`;
+}
+
+// Small label under a team button in plain mode.
+function plainSide(g, side) {
+  const s = Number(g.spread_home);
+  if (g.spread_home === null || isNaN(s) || s === 0) return "";
+  const m = Math.abs(s);
+  const isFav = (side === "home") === (s < 0);
+  return isFav ? `Needs to win by more than ${m}` : `Wins, or loses by less than ${m}`;
+}
+
 // Which side covered: returns "home", "away", "push", or null if not final.
 function covered(g) {
   if (g.status !== "final" || g.home_score == null || g.away_score == null || g.spread_home == null) return null;
@@ -167,9 +189,10 @@ async function render() {
       const score = g.status === "final" || g.status === "in_progress"
         ? `<div class="score">${esc(g.away)} ${g.away_score ?? 0} – ${esc(g.home)} ${g.home_score ?? 0}${g.status === "final" ? " (final)" : ""}</div>`
         : `<div class="kick">${fmtKick(g)}</div>`;
-      const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${esc(abbr)}</button>`;
+      const plain = plainOn();
+      const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${esc(abbr)}${plain && plainSide(g, side) ? `<small>${esc(plainSide(g, side))}</small>` : ""}</button>`;
       return `<div class="game">
-        <div class="spread">${esc(spreadText(g))}</div>
+        <div class="spread">${esc(plain ? plainSpread(g) : spreadText(g))}</div>
         <div class="teams">${btn("away", g.away)}<span>@</span>${btn("home", g.home)}</div>
         ${score}
       </div>`;
@@ -191,6 +214,7 @@ async function render() {
       ${payBox}
       <div id="msg2"></div>
       <h2>Week ${esc(week)} · Pick'em</h2>
+      <label class="toggle"><input type="checkbox" id="plain-toggle" ${plainOn() ? "checked" : ""}> Plain-English spreads</label>
       <p class="hint">Pick the side that covers the spread.</p>
       ${pickRows}
       <h2>Week ${esc(week)} · Survivor</h2>
@@ -199,6 +223,7 @@ async function render() {
       <div id="admin"></div>`;
 
     $("#logout").onclick = logOut;
+    $("#plain-toggle").onchange = (e) => { setPlain(e.target.checked); render(); };
     document.querySelectorAll(".pickbtn:not([disabled])").forEach((b) => b.onclick = () => submitPick(b.dataset.game, b.dataset.side));
     document.querySelectorAll(".teambtn:not([disabled])").forEach((b) => b.onclick = () => submitSurvivor(week, b.dataset.team));
 
