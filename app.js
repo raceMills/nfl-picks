@@ -141,6 +141,31 @@ function covered(g) {
   return margin > 0 ? "home" : "away";
 }
 
+// "2h 14m", "3d 1h" for the lock countdown.
+function fmtLeft(ms) {
+  const m = Math.max(0, Math.floor(ms / 60000));
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${mm}m` : `${mm}m`;
+}
+
+// First-visit how-to card, hidden after "Got it".
+const seenHowTo = () => { try { return localStorage.getItem("nfl-howto") === "1"; } catch (e) { return true; } };
+const setHowTo = () => { try { localStorage.setItem("nfl-howto", "1"); } catch (e) {} };
+
+// Swipe right = home team, swipe left = away team. Taps still work as a fallback.
+function attachSwipe(el) {
+  let x0 = null, y0 = 0;
+  el.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  el.addEventListener("touchend", (e) => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    const dy = e.changedTouches[0].clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    submitPick(el.dataset.gid, dx > 0 ? "home" : "away");
+  });
+}
+
 // The week to show: the earliest week that still has a game not yet final.
 function currentWeek(games) {
   const open = games.filter((g) => g.status !== "final");
@@ -154,23 +179,32 @@ async function render() {
   try {
     const [games, picks, surv] = await Promise.all([
       sb.from("nfl_games").select("*").order("start_at"),
-      sb.from("nfl_picks").select("*").eq("player", me.name),
-      sb.from("nfl_survivor").select("*").eq("player", me.name)
+      rpc("nfl_picks_visible", { p_token: t }),
+      rpc("nfl_survivor_visible", { p_token: t })
     ]);
     if (games.error) throw games.error;
-    if (picks.error) throw picks.error;
-    if (surv.error) throw surv.error;
 
     const all = games.data;
     const week = currentWeek(all);
     const wg = all.filter((g) => g.week === week);
-    const myPicks = Object.fromEntries(picks.data.map((p) => [p.game_id, p.side]));
-    const survThisWeek = (surv.data.find((s) => s.week === week) || {}).team;
-    const usedElsewhere = new Set(surv.data.filter((s) => s.week !== week).map((s) => s.team));
+    // The server only sends other players' picks once their game has kicked off
+    const mine = picks.filter((p) => p.player === me.name);
+    const myPicks = Object.fromEntries(mine.map((p) => [p.game_id, p.side]));
+    const survMine = surv.filter((s) => s.player === me.name);
+    const survThisWeek = (survMine.find((s) => s.week === week) || {}).team;
+    const usedElsewhere = new Set(survMine.filter((s) => s.week !== week).map((s) => s.team));
+
+    // After kickoff, show who took each side (others only; yours is on the button)
+    const revealHtml = (g) => {
+      if (!started(g)) return "";
+      const rows = picks.filter((p) => p.game_id === g.id && p.player !== me.name);
+      const names = (side) => rows.filter((p) => p.side === side).map((p) => esc(p.player)).join(", ") || "nobody else";
+      return `<div class="reveal">Locked. ${esc(g.away)}: ${names("away")} · ${esc(g.home)}: ${names("home")}</div>`;
+    };
 
     // Record across every final game you picked
     let won = 0, lost = 0, pushed = 0;
-    for (const p of picks.data) {
+    for (const p of mine) {
       const g = all.find((x) => x.id === p.game_id);
       const c = g && covered(g);
       if (!c) continue;
@@ -188,13 +222,15 @@ async function render() {
       const pick = myPicks[g.id];
       const score = g.status === "final" || g.status === "in_progress"
         ? `<div class="score">${esc(g.away)} ${g.away_score ?? 0} – ${esc(g.home)} ${g.home_score ?? 0}${g.status === "final" ? " (final)" : ""}</div>`
-        : `<div class="kick">${fmtKick(g)}</div>`;
+        : started(g) ? "" : `<div class="kick">Locks in ${fmtLeft(Date.parse(g.start_at) - Date.now())} · ${fmtKick(g)}</div>`;
+      const reveal = revealHtml(g);
       const plain = plainOn();
       const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${esc(abbr)}${plain && plainSide(g, side) ? `<small>${esc(plainSide(g, side))}</small>` : ""}</button>`;
-      return `<div class="game">
+      return `<div class="game" data-gid="${esc(g.id)}" data-lock="${lock ? 1 : 0}">
         <div class="spread">${esc(plain ? plainSpread(g) : spreadText(g))}</div>
         <div class="teams">${btn("away", g.away)}<span>@</span>${btn("home", g.home)}</div>
         ${score}
+        ${reveal}
       </div>`;
     }).join("") || `<p class="hint">No games posted for this week yet.</p>`;
 
@@ -213,6 +249,14 @@ async function render() {
       </header>
       ${payBox}
       <div id="msg2"></div>
+      ${seenHowTo() ? "" : `<div class="card howto">
+        <b>How it works</b>
+        <p class="hint">1. Each game has a spread. Pick the team you think covers it.<br>
+        2. Swipe right for the home team, left for the away team (or tap).<br>
+        3. Picks lock at kickoff. Until then you can change them, and nobody sees yours.<br>
+        4. Survivor: pick one team a week. You can't reuse a team, and a loss knocks you out.</p>
+        <button class="btn" id="howto-ok" type="button">Got it</button>
+      </div>`}
       <h2>Week ${esc(week)} · Pick'em</h2>
       <label class="toggle"><input type="checkbox" id="plain-toggle" ${plainOn() ? "checked" : ""}> Plain-English spreads</label>
       <p class="hint">Pick the side that covers the spread.</p>
@@ -224,6 +268,8 @@ async function render() {
 
     $("#logout").onclick = logOut;
     $("#plain-toggle").onchange = (e) => { setPlain(e.target.checked); render(); };
+    if ($("#howto-ok")) $("#howto-ok").onclick = () => { setHowTo(); render(); };
+    document.querySelectorAll(".game[data-lock='0']").forEach(attachSwipe);
     document.querySelectorAll(".pickbtn:not([disabled])").forEach((b) => b.onclick = () => submitPick(b.dataset.game, b.dataset.side));
     document.querySelectorAll(".teambtn:not([disabled])").forEach((b) => b.onclick = () => submitSurvivor(week, b.dataset.team));
 
@@ -307,4 +353,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#f-login").onsubmit = onLogin;
   $("#f-join").onsubmit = onJoin;
   init();
+  // Keep the lock countdowns current while the app is open
+  setInterval(() => { if (me && !$("#home").hidden && !document.hidden) render(); }, 60000);
 });
