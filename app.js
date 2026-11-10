@@ -198,6 +198,7 @@ async function render() {
     const still = await rpc("nfl_me", { p_token: t });
     if (!still.length) { clearToken(); return location.reload(); }
     if (view !== "picks") return renderSection();
+    await loadProfiles();
 
     const [games, picks, surv, tbs] = await Promise.all([
       sb.from("nfl_games").select("*").order("start_at"),
@@ -222,7 +223,7 @@ async function render() {
       if (!started(g)) return "";
       const all = picks.filter((p) => p.game_id === g.id);
       const others = all.filter((p) => p.player !== me.name);
-      const names = (side) => others.filter((p) => p.side === side).map((p) => esc(p.player)).join(", ") || "nobody else";
+      const names = (side) => others.filter((p) => p.side === side).map((p) => nameHtml(p.player)).join(", ") || "nobody else";
       // Share of the group on each side, counting your own pick too
       const pct = (side) => all.length ? Math.round(100 * all.filter((p) => p.side === side).length / all.length) : 0;
       return `<div class="reveal">Locked. ${esc(g.away)} ${pct("away")}% (${names("away")}) · ${esc(g.home)} ${pct("home")}% (${names("home")})</div>`;
@@ -333,7 +334,7 @@ async function submitSurvivor(week, team) {
 }
 
 // ---------- Tabs: Picks, Payouts, News ----------
-const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payouts"], ["news", "News"], ["chat", "Chat"]];
+const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payouts"], ["news", "News"], ["chat", "Chat"], ["profile", "Profile"]];
 function tabsHtml() {
   return `<nav class="tabs">${VIEWS.map(([k, l]) => `<button type="button" data-view="${k}" class="${view === k ? "on" : ""}">${l}</button>`).join("")}</nav>`;
 }
@@ -341,6 +342,7 @@ function tabsHtml() {
 function bindTabs() {
   document.querySelectorAll("#drawer-nav [data-view]").forEach((b) => b.onclick = () => {
     view = b.dataset.view;
+    draft = null;
     closeDrawer();
     paintNav();
     render();
@@ -356,8 +358,10 @@ function paintNav() {
 async function renderSection() {
   const header = `<p class="hint greet">Hi ${esc(me.name)}</p>`;
   let body;
+  await loadProfiles();
   try {
-    body = view === "payouts" ? await payoutsHtml()
+    body = view === "profile" ? profileHtml()
+      : view === "payouts" ? await payoutsHtml()
       : view === "standings" ? await standingsHtml()
       : view === "chat" ? await chatHtml()
       : await newsHtml();
@@ -366,6 +370,7 @@ async function renderSection() {
   $("#home-body").innerHTML = header + `<div id="msg2"></div><div>${body}</div>`;
   bindTabs();
   if (view === "chat") bindChat();
+  if (view === "profile") bindProfile();
 }
 
 // ---------- Pool chat ----------
@@ -409,7 +414,7 @@ async function loadChat() {
     const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
     box.innerHTML = rows.map((m) => `
       <div class="msg ${m.is_mine ? "mine" : ""}">
-        <div class="meta"><b>${esc(m.player)}</b> <span class="hint">${fmtChatTime(m.created_at)}</span>
+        <div class="meta">${nameHtml(m.player)} <span class="hint">${fmtChatTime(m.created_at)}</span>
           ${m.can_delete ? `<button class="linkbtn tiny" data-del="${m.id}" type="button">Delete</button>` : ""}</div>
         <div>${esc(m.body)}</div>
       </div>`).join("") || `<p class="hint">No messages yet. Say hi 👋</p>`;
@@ -457,7 +462,7 @@ async function payoutsHtml() {
     const winners = Object.keys(tally).filter((n) => tally[n] === best && best > 0);
     const each = winners.length ? (weekly / winners.length).toFixed(2) : null;
     const status = done
-      ? (winners.length ? `${best} right · ${winners.map(esc).join(", ")} · $${each} each` : "No picks scored")
+      ? (winners.length ? `${best} right · ${winners.map((n) => nameHtml(n)).join(", ")} · $${each} each` : "No picks scored")
       : "Games still in progress";
     weekRows.push(`<div class="card pay"><b>Week ${w}</b><div class="hint">${status}</div></div>`);
   }
@@ -541,6 +546,89 @@ function updateLive() {
   });
 }
 
+// ---------- Profiles: avatar, favorite team, and how names show ----------
+const AVATARS = ["🏈", "🌭", "🥚", "🍺", "🦅", "🐻", "🐯", "🦁", "🐺", "🚀", "⚡", "🔥", "🎯", "👑", "🧀", "🐂"];
+const TEAMS = ["ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC",
+  "LV", "LAC", "LAR", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SF", "SEA", "TB", "TEN", "WSH"];
+let profiles = {};   // name -> { avatar, favorite_team, display_mode }
+let draft = null;    // profile edits in progress
+
+async function loadProfiles() {
+  try {
+    const rows = await rpc("nfl_profiles");
+    profiles = Object.fromEntries(rows.map((p) => [p.name, p]));
+  } catch (e) { /* keep the last ones we had */ }
+}
+
+// A steady colour per favorite team, so the same team always looks the same.
+const teamColor = (team) => {
+  if (!team) return "#8a7a66";
+  let h = 0;
+  for (const ch of team) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h}, 62%, 42%)`;
+};
+
+// A player's name as shown everywhere: name, avatar, or both, with a favorite-team tag.
+function nameHtml(name, p = profiles[name] || {}) {
+  const mode = p.display_mode || "both";
+  const team = p.favorite_team;
+  const badge = `<span class="av" style="background:${teamColor(team)}" title="${esc(name)}">${esc(p.avatar || "🏈")}</span>`;
+  const tag = team ? ` <span class="tm">${esc(team)}</span>` : "";
+  if (mode === "avatar") return `${badge}${tag}`;
+  if (mode === "name") return `<b>${esc(name)}</b>${tag}`;
+  return `${badge}<b>${esc(name)}</b>${tag}`;
+}
+
+function profileHtml() {
+  if (!draft) {
+    const p = profiles[me.name] || {};
+    draft = { avatar: p.avatar || "🏈", team: p.favorite_team || "", mode: p.display_mode || "both" };
+  }
+  return `
+    <h2>Your profile</h2>
+    <div class="card">
+      <div class="preview">${nameHtml(me.name, { avatar: draft.avatar, favorite_team: draft.team || null, display_mode: draft.mode })}</div>
+      <label>Avatar</label>
+      <div class="avgrid">${AVATARS.map((a) => `<button type="button" class="avpick ${a === draft.avatar ? "on" : ""}" data-av="${a}">${a}</button>`).join("")}</div>
+      <label for="pf-team">Favorite team</label>
+      <select id="pf-team" class="teamsel">
+        <option value="">None</option>
+        ${TEAMS.map((t) => `<option value="${t}" ${t === draft.team ? "selected" : ""}>${t}</option>`).join("")}
+      </select>
+      <label>Show my name as</label>
+      <div class="modes">
+        ${[["both", "Avatar and name"], ["avatar", "Avatar only"], ["name", "Name only"]]
+          .map(([v, l]) => `<button type="button" class="modebtn ${draft.mode === v ? "on" : ""}" data-mode="${v}">${l}</button>`).join("")}
+      </div>
+      <button class="btn" id="pf-save" type="button">Save profile</button>
+    </div>`;
+}
+
+function bindProfile() {
+  const paint = () => {
+    document.querySelectorAll(".avpick").forEach((b) => b.classList.toggle("on", b.dataset.av === draft.avatar));
+    document.querySelectorAll(".modebtn").forEach((b) => b.classList.toggle("on", b.dataset.mode === draft.mode));
+    const pv = document.querySelector(".preview");
+    if (pv) pv.innerHTML = nameHtml(me.name, { avatar: draft.avatar, favorite_team: draft.team || null, display_mode: draft.mode });
+  };
+  document.querySelectorAll(".avpick").forEach((b) => b.onclick = () => { draft.avatar = b.dataset.av; paint(); });
+  document.querySelectorAll(".modebtn").forEach((b) => b.onclick = () => { draft.mode = b.dataset.mode; paint(); });
+  $("#pf-team").onchange = (e) => { draft.team = e.target.value; paint(); };
+  $("#pf-save").onclick = saveProfile;
+  paint();
+}
+
+async function saveProfile() {
+  try {
+    await rpc("nfl_set_profile", {
+      p_token: token(), p_avatar: draft.avatar, p_favorite_team: draft.team || null, p_display_mode: draft.mode
+    });
+    draft = null;
+    await loadProfiles();
+    renderSection();
+  } catch (err) { flash(err.message, false, "#msg2"); }
+}
+
 // ---------- Shared helpers for results ----------
 // What happened to a team's game: "win", "loss", "push", or null if not final yet.
 function teamResult(g, team) {
@@ -588,7 +676,7 @@ function tiebreakHtml(wg, tbs, week) {
   // Other players' guesses show once the last game kicks off
   const others = locked ? tbs.filter((t) => t.week === week && t.player !== me.name) : [];
   const othersLine = others.length
-    ? `<p class="hint">Guesses: ${others.map((t) => `${esc(t.player)} ${t.points}`).join(" · ")}</p>` : "";
+    ? `<p class="hint">Guesses: ${others.map((t) => `${nameHtml(t.player)} ${t.points}`).join(" · ")}</p>` : "";
   return `
     <h2>Monday tiebreaker</h2>
     <div class="card">
@@ -641,7 +729,7 @@ async function standingsHtml() {
   const standings = Object.entries(rec).sort((a, b) => b[1].w - a[1].w || a[1].l - b[1].l);
   const streakTag = (s) => s >= 3 ? ` 🔥 ${s} in a row` : s <= -3 ? ` ❄️ ${-s} losing` : "";
   const standingRows = standings.map(([name, r], i) => `
-    <div class="srow"><span>${i + 1}. ${esc(name)}</span><b>${r.w}-${r.l}${r.p ? `-${r.p}` : ""}</b><span class="hint">${streakTag(r.streak)}</span></div>`).join("")
+    <div class="srow"><span>${i + 1}. ${nameHtml(name)}</span><b>${r.w}-${r.l}${r.p ? `-${r.p}` : ""}</b><span class="hint">${streakTag(r.streak)}</span></div>`).join("")
     || `<p class="hint">No decided picks yet.</p>`;
 
   // Last finished week's recap
@@ -650,8 +738,8 @@ async function standingsHtml() {
   if (lastDone) {
     const wk = weekWinners(lastDone, all, picks);
     const tb = tiebreakWinner(lastDone, all, tbs);
-    recap = `<p><b>Week ${lastDone}:</b> ${wk.names.length ? `${wk.names.map(esc).join(", ")} with ${wk.best} right` : "no picks scored"}</p>
-      ${tb ? `<p class="hint">Tiebreaker: ${tb.names.map(esc).join(", ")} (total ${tb.total})</p>` : ""}`;
+    recap = `<p><b>Week ${lastDone}:</b> ${wk.names.length ? `${wk.names.map((n) => nameHtml(n)).join(", ")} with ${wk.best} right` : "no picks scored"}</p>
+      ${tb ? `<p class="hint">Tiebreaker: ${tb.names.map((n) => nameHtml(n)).join(", ")} (total ${tb.total})</p>` : ""}`;
   }
 
   // Survivor: alive players, and when everyone else went out
@@ -669,7 +757,7 @@ async function standingsHtml() {
   }
   const alive = survPlayers.filter((pl) => survStatus[pl].alive);
   const out = survPlayers.filter((pl) => !survStatus[pl].alive);
-  const survRow = (pl, text) => `<div class="srow"><span>${esc(pl)}</span><span class="hint">${text}</span></div>`;
+  const survRow = (pl, text) => `<div class="srow"><span>${nameHtml(pl)}</span><span class="hint">${text}</span></div>`;
   const survHtml = survPlayers.length
     ? `<div class="card"><p><b>Alive (${alive.length})</b></p>${alive.map((pl) => survRow(pl, "still in")).join("") || `<p class="hint">Nobody left.</p>`}
        <p><b>Out (${out.length})</b></p>${out.map((pl) => survRow(pl, `out in week ${survStatus[pl].outWeek}`)).join("")}</div>`
