@@ -1,0 +1,9 @@
+{
+  "name": "Hotdawgs NFL Pool",
+  "short_name": "Hotdawgs NFL",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#FFF6E3",
+  "theme_color": "#D92B2B",
+  "icons": []
+}

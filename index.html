@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hotdawgs NFL">
+<meta name="theme-color" content="#D92B2B">
+<link rel="manifest" href="manifest.json">
+<title>Hotdawgs NFL Pool</title>
+<style>
+  :root { --red: #D92B2B; --mustard: #f4b33d; --paper: #fff6e3; --ink: #2a1d0f; --shadow: #3a2a1a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, "Helvetica Neue", Arial, sans-serif; color: var(--ink);
+    background: var(--paper); padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(40px + env(safe-area-inset-bottom, 0px));
+    -webkit-text-size-adjust: 100%; }
+  h1 { font-family: Rockwell, Georgia, serif; font-weight: 900; color: var(--red); margin: 0 0 4px; font-size: 26px; }
+  h2 { font-family: Rockwell, Georgia, serif; font-weight: 900; font-size: 19px; margin: 22px 0 6px; }
+  .hint { font-size: 13px; opacity: .7; margin: 4px 0; }
+  .card { background: #fff; border: 3px solid var(--shadow); border-radius: 16px; padding: 14px; box-shadow: 0 4px 0 var(--shadow); margin: 12px 0; }
+  .warn { background: #fff3c4; }
+  .ok { color: #1e7a3c; font-weight: 700; } .err { color: var(--red); font-weight: 700; }
+  #msg:empty, #msg2:empty { display: none; }
+  #msg, #msg2 { margin: 8px 0; font-size: 14px; }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  .tabs { display: flex; gap: 8px; margin: 14px 0; }
+  .tabs button { flex: 1; font: inherit; font-weight: 800; padding: 10px; border: 3px solid var(--shadow); border-radius: 14px;
+    background: #fff; color: var(--ink); }
+  .tabs button.on { background: var(--red); color: #fff; }
+  label { display: block; font-weight: 800; font-size: 14px; margin: 12px 0 4px; }
+  input[type=text], input[type=password] { width: 100%; font: inherit; font-size: 17px; padding: 12px; border: 3px solid var(--shadow);
+    border-radius: 12px; background: #fff; color: var(--ink); -webkit-appearance: none; }
+  .btn { width: 100%; font: inherit; font-size: 17px; font-weight: 900; padding: 14px; margin-top: 16px; border: 3px solid var(--shadow);
+    border-radius: 14px; background: var(--mustard); color: var(--ink); box-shadow: 0 4px 0 var(--shadow); }
+  .linkbtn { font: inherit; font-weight: 800; background: none; border: 0; color: var(--red); padding: 8px 0; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .game { background: #fff; border: 3px solid var(--shadow); border-radius: 14px; padding: 12px; margin: 10px 0; }
+  .spread { font-weight: 900; text-align: center; font-size: 15px; }
+  .teams { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; margin-top: 8px; }
+  .teams span { font-weight: 800; opacity: .6; }
+  .pickbtn, .teambtn { font: inherit; font-weight: 900; font-size: 16px; padding: 12px 8px; min-height: 44px;
+    border: 3px solid var(--shadow); border-radius: 12px; background: #fff; color: var(--ink); }
+  .pickbtn.on, .teambtn.on { background: var(--mustard); box-shadow: 0 3px 0 var(--shadow); }
+  .pickbtn:disabled, .teambtn:disabled { opacity: .45; }
+  .kick, .score { font-size: 13px; text-align: center; margin-top: 8px; opacity: .75; }
+  .teamgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; margin-top: 8px; }
+  .teambtn { font-size: 15px; }
+  .paidrow { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-weight: 700; font-size: 16px; }
+  .paidrow input { width: 22px; height: 22px; accent-color: var(--red); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Log in / sign up -->
+  <section id="gate" hidden>
+    <h1>Hotdawgs NFL Pool</h1>
+    <p class="hint">Weekly pick'em against the spread and a survivor game.</p>
+    <div class="tabs">
+      <button id="tab-login" class="on" type="button">Log in</button>
+      <button id="tab-join" type="button">Join the pool</button>
+    </div>
+
+    <form id="f-login" class="card" autocomplete="on">
+      <label for="l-name">Your name</label>
+      <input type="text" id="l-name" name="username" autocomplete="username" autocapitalize="words" required>
+      <label for="l-pass">Password</label>
+      <input type="password" id="l-pass" name="password" autocomplete="current-password" required>
+      <button class="btn" type="submit">Let's go 🌭</button>
+    </form>
+
+    <form id="f-join" class="card" autocomplete="on" hidden>
+      <p class="hint">You need the group password once. Then you set your own.</p>
+      <label for="j-name">Your name</label>
+      <input type="text" id="j-name" name="username" autocomplete="username" autocapitalize="words" required>
+      <label for="j-invite">Group password</label>
+      <input type="password" id="j-invite" autocomplete="off" required>
+      <label for="j-venmo">Venmo handle</label>
+      <input type="text" id="j-venmo" autocomplete="off" autocapitalize="none" placeholder="@yourname" required>
+      <p class="hint">Needed to finish setup. Entry is paid by Venmo.</p>
+      <label for="j-pass">Create a password</label>
+      <input type="password" id="j-pass" name="new-password" autocomplete="new-password" required>
+      <label for="j-pass2">Type it again</label>
+      <input type="password" id="j-pass2" autocomplete="new-password" required>
+      <button class="btn" type="submit">Join 🌭</button>
+    </form>
+    <div id="msg"></div>
+  </section>
+
+  <!-- Personal home page -->
+  <section id="home" hidden>
+    <div id="home-body"></div>
+  </section>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="egg.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
