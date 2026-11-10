@@ -240,6 +240,8 @@ async function render() {
         : started(g) ? "" : `<div class="kick">Locks in ${fmtLeft(Date.parse(g.start_at) - Date.now())} · ${fmtKick(g)}</div>`;
       const reveal = revealHtml(g);
       const wxLine = g.weather ? `<div class="wx">☁️ ${esc(g.weather)}</div>` : "";
+      // Filled in by updateLive() every 30 seconds while a game is on
+      const liveBox = `<div class="live" data-gid="${esc(g.id)}" data-spread="${g.spread_home ?? ""}" data-pick="${pick || ""}"></div>`;
       const plain = plainOn();
       const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${pick === side ? "🌭 " : ""}${esc(abbr)}${plain && plainSide(g, side) ? `<small>${esc(plainSide(g, side))}</small>` : ""}</button>`;
       return `<div class="game" data-gid="${esc(g.id)}" data-lock="${lock ? 1 : 0}">
@@ -247,6 +249,7 @@ async function render() {
         <div class="teams">${btn("away", g.away)}<span>@</span>${btn("home", g.home)}</div>
         ${wxLine}
         ${score}
+        ${liveBox}
         ${reveal}
       </div>`;
     }).join("") || `<p class="hint">No games posted for this week yet.</p>`;
@@ -289,6 +292,7 @@ async function render() {
     $("#logout").onclick = logOut;
     bindTabs();
     if ($("#tb-save")) $("#tb-save").onclick = () => saveTiebreak(week);
+    refreshLive().then(updateLive);
     $("#plain-toggle").onchange = (e) => { setPlain(e.target.checked); render(); };
     if ($("#howto-ok")) $("#howto-ok").onclick = () => { setHowTo(); render(); };
     document.querySelectorAll(".game[data-lock='0']").forEach(attachSwipe);
@@ -405,6 +409,53 @@ async function newsHtml() {
       ${n.summary ? `<p class="hint">${esc(n.summary)}</p>` : ""}
     </div>`).join("");
   return `<h2>Injuries & news</h2>${items}`;
+}
+
+// ---------- Live covering: live scores from ESPN, checked against each player's own pick ----------
+const ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+let liveScores = {}; // game id -> { state, detail, home, away, hs, as }
+
+async function refreshLive() {
+  try {
+    const r = await fetch(ESPN_SCOREBOARD, { cache: "no-store" });
+    if (!r.ok) return;
+    const d = await r.json();
+    const next = {};
+    for (const ev of d.events || []) {
+      const c = ev.competitions?.[0];
+      if (!c) continue;
+      const h = c.competitors.find((t) => t.homeAway === "home");
+      const a = c.competitors.find((t) => t.homeAway === "away");
+      next[String(ev.id)] = {
+        state: ev.status?.type?.state,
+        detail: ev.status?.type?.shortDetail || "",
+        home: h?.team?.abbreviation, away: a?.team?.abbreviation,
+        hs: Number(h?.score ?? 0), as: Number(a?.score ?? 0),
+      };
+    }
+    liveScores = next;
+  } catch (e) { /* keep the last scores we had */ }
+}
+
+// Covering = home score - away score + home spread, judged on your side.
+function updateLive() {
+  document.querySelectorAll(".live[data-gid]").forEach((el) => {
+    const L = liveScores[el.dataset.gid];
+    if (!L || L.state !== "in") { el.innerHTML = ""; return; }
+    const scoreLine = `<div class="livescore">${esc(L.away)} ${L.as} – ${esc(L.home)} ${L.hs} · ${esc(L.detail)}</div>`;
+    const spread = el.dataset.spread === "" ? null : Number(el.dataset.spread);
+    const side = el.dataset.pick;
+    let pickLine = "";
+    if (side && spread !== null && !isNaN(spread)) {
+      const margin = L.hs - L.as + spread;
+      if (margin === 0) pickLine = `<div class="livepick">Exactly on the number</div>`;
+      else {
+        const covering = side === "home" ? margin > 0 : margin < 0;
+        pickLine = `<div class="livepick ${covering ? "ok" : "err"}">${covering ? "Covering" : "Not covering"} by ${Math.abs(margin)}</div>`;
+      }
+    }
+    el.innerHTML = scoreLine + pickLine;
+  });
 }
 
 // ---------- Shared helpers for results ----------
@@ -672,4 +723,8 @@ document.addEventListener("DOMContentLoaded", () => {
   init();
   // Keep the lock countdowns current while the app is open
   setInterval(() => { if (me && !$("#home").hidden && !document.hidden) render(); }, 60000);
+  // Live scores every 30 seconds, updating only the covering lines on the page
+  setInterval(() => {
+    if (me && view === "picks" && !$("#home").hidden && !document.hidden) refreshLive().then(updateLive);
+  }, 30000);
 });
