@@ -31,6 +31,7 @@ let view = "picks"; // picks | payouts | news
 function show(id) {
   $("#gate").hidden = id !== "gate";
   $("#home").hidden = id !== "home";
+  $("#appbar").hidden = id !== "home";
 }
 function flash(text, ok = false, where = "#msg") {
   const el = $(where);
@@ -280,11 +281,7 @@ async function render() {
     }).join("") || `<p class="hint">No games posted yet.</p>`;
 
     $("#home-body").innerHTML = `
-      <header class="top">
-        <div><h1>🌭 Hotdawgs NFL Pool</h1><p class="hint">Hi ${esc(me.name)} · pick'em record ${won}-${lost}${pushed ? `-${pushed}` : ""}</p></div>
-        <button class="linkbtn" id="logout">Log out</button>
-      </header>
-      ${tabsHtml()}
+      <p class="hint greet">Hi ${esc(me.name)} · pick'em record ${won}-${lost}${pushed ? `-${pushed}` : ""}</p>
       ${payBox}
       ${settings.announcement ? `<div class="card ann"><b>📣 From the commissioner</b><p class="hint">${esc(settings.announcement)}</p></div>` : ""}
       <div id="msg2"></div>
@@ -306,7 +303,6 @@ async function render() {
       <div class="teamgrid">${survRows}</div>
       <div id="admin"></div>`;
 
-    $("#logout").onclick = logOut;
     bindTabs();
     if ($("#tb-save")) $("#tb-save").onclick = () => saveTiebreak(week);
     refreshLive().then(updateLive);
@@ -341,13 +337,24 @@ const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payo
 function tabsHtml() {
   return `<nav class="tabs">${VIEWS.map(([k, l]) => `<button type="button" data-view="${k}" class="${view === k ? "on" : ""}">${l}</button>`).join("")}</nav>`;
 }
+// The side menu holds the section links. Tapping one closes the menu and shows that section.
 function bindTabs() {
-  document.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => { view = b.dataset.view; render(); });
+  document.querySelectorAll("#drawer-nav [data-view]").forEach((b) => b.onclick = () => {
+    view = b.dataset.view;
+    closeDrawer();
+    paintNav();
+    render();
+  });
+}
+const openDrawer = () => document.body.classList.add("drawer-open");
+const closeDrawer = () => document.body.classList.remove("drawer-open");
+function paintNav() {
+  document.querySelectorAll("#drawer-nav [data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
 }
 
 // Payouts and news are their own screens; picks keeps the full home page above.
 async function renderSection() {
-  const header = `<header class="top"><div><h1>🌭 Hotdawgs NFL Pool</h1><p class="hint">Hi ${esc(me.name)}</p></div><button class="linkbtn" id="logout">Log out</button></header>${tabsHtml()}`;
+  const header = `<p class="hint greet">Hi ${esc(me.name)}</p>`;
   let body;
   try {
     body = view === "payouts" ? await payoutsHtml()
@@ -357,7 +364,6 @@ async function renderSection() {
   }
   catch (err) { body = `<p class="err">${esc(err.message)}</p>`; }
   $("#home-body").innerHTML = header + `<div id="msg2"></div><div>${body}</div>`;
-  $("#logout").onclick = logOut;
   bindTabs();
   if (view === "chat") bindChat();
 }
@@ -793,6 +799,13 @@ async function saveSettings() {
 
 // ---------- Wire up ----------
 document.addEventListener("DOMContentLoaded", () => {
+  // Side menu: build the links, then wire the menu button, backdrop and log out
+  $("#drawer-nav").innerHTML = VIEWS.map(([k, l]) => `<button type="button" data-view="${k}">${l}</button>`).join("");
+  paintNav();
+  bindTabs();
+  $("#menu-btn").onclick = openDrawer;
+  $("#scrim").onclick = closeDrawer;
+  $("#logout-drawer").onclick = () => { closeDrawer(); logOut(); };
   $("#tab-login").onclick = () => showGate("login");
   $("#tab-join").onclick = () => showGate("join");
   $("#f-login").onsubmit = onLogin;

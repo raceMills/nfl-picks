@@ -11,9 +11,32 @@
 <style>
   :root { --red: #D92B2B; --mustard: #f4b33d; --paper: #fff6e3; --ink: #2a1d0f; --shadow: #3a2a1a; }
   * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; max-width: 100%; }
   body { margin: 0; font-family: -apple-system, system-ui, "Helvetica Neue", Arial, sans-serif; color: var(--ink);
-    background: var(--paper); padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(40px + env(safe-area-inset-bottom, 0px));
+    background: var(--paper); padding: calc(72px + env(safe-area-inset-top, 0px)) 16px calc(40px + env(safe-area-inset-bottom, 0px));
     -webkit-text-size-adjust: 100%; }
+  /* Top bar with the menu button */
+  .appbar { position: fixed; top: 0; left: 0; right: 0; z-index: 20; height: calc(56px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 12px 0; background: var(--red); color: #fff; display: flex; align-items: center; gap: 12px;
+    border-bottom: 3px solid var(--shadow); }
+  .appbar[hidden] { display: none; }
+  .menubtn { font: inherit; font-size: 24px; line-height: 1; width: 44px; height: 44px; border: 3px solid #fff6e3; border-radius: 12px;
+    background: transparent; color: #fff6e3; font-weight: 900; }
+  .apptitle { font-family: Rockwell, Georgia, serif; font-weight: 900; font-size: 19px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Side menu: slides in from the left */
+  .drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 72%; max-width: 280px; z-index: 40; background: var(--paper);
+    border-right: 3px solid var(--shadow); padding: calc(20px + env(safe-area-inset-top, 0px)) 16px 20px;
+    display: flex; flex-direction: column; gap: 10px; transform: translateX(-105%); transition: transform .25s ease; }
+  body.drawer-open .drawer { transform: translateX(0); }
+  .drawer-title { font-family: Rockwell, Georgia, serif; font-weight: 900; color: var(--red); font-size: 20px; margin-bottom: 8px; }
+  #drawer-nav { display: flex; flex-direction: column; gap: 10px; }
+  #drawer-nav button { font: inherit; font-weight: 900; font-size: 18px; text-align: left; padding: 14px; min-height: 52px;
+    border: 3px solid var(--shadow); border-radius: 14px; background: #fff; color: var(--ink); box-shadow: 0 3px 0 var(--shadow); }
+  #drawer-nav button.on { background: var(--red); color: #fff; }
+  .drawer .linkbtn { margin-top: auto; text-align: left; font-size: 16px; padding: 12px 4px; }
+  .scrim { position: fixed; inset: 0; z-index: 30; background: rgba(42, 29, 15, .4); opacity: 0; pointer-events: none; transition: opacity .25s; }
+  body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
+  .greet { margin: 0 0 6px; }
   h1 { font-family: Rockwell, Georgia, serif; font-weight: 900; color: var(--red); margin: 0 0 4px; font-size: 26px; }
   h2 { font-family: Rockwell, Georgia, serif; font-weight: 900; font-size: 19px; margin: 22px 0 6px; }
   .hint { font-size: 13px; opacity: .7; margin: 4px 0; }
@@ -79,6 +102,16 @@
 </style>
 </head>
 <body>
+<header class="appbar" id="appbar" hidden>
+  <button id="menu-btn" class="menubtn" type="button" aria-label="Open menu">☰</button>
+  <span class="apptitle">🌭 Hotdawgs NFL Pool</span>
+</header>
+<aside class="drawer" id="drawer" aria-label="Menu">
+  <div class="drawer-title">🌭 Hotdawgs NFL</div>
+  <nav id="drawer-nav"></nav>
+  <button class="linkbtn" id="logout-drawer" type="button">Log out</button>
+</aside>
+<div class="scrim" id="scrim"></div>
 <div class="wrap">
 
   <!-- Log in / sign up -->
