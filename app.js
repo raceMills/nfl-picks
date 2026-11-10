@@ -24,7 +24,8 @@ async function rpc(fn, args) {
 }
 
 let me = null;
-let settings = { venmo_handle: "", entry_fee: "" };
+let settings = { venmo_handle: "", entry_fee: "", weekly_prize: "0", survivor_prize: "0", season_start_week: 1, test_season: false, paid_count: 0 };
+let view = "picks"; // picks | payouts | news
 
 // ---------- Screens ----------
 function show(id) {
@@ -185,6 +186,7 @@ async function render() {
     // Check the login hasn't run out (one hour) before showing picks
     const still = await rpc("nfl_me", { p_token: t });
     if (!still.length) { clearToken(); return location.reload(); }
+    if (view !== "picks") return renderSection();
 
     const [games, picks, surv] = await Promise.all([
       sb.from("nfl_games").select("*").order("start_at"),
@@ -256,6 +258,7 @@ async function render() {
         <div><h1>🌭 Hotdawgs NFL Pool</h1><p class="hint">Hi ${esc(me.name)} · pick'em record ${won}-${lost}${pushed ? `-${pushed}` : ""}</p></div>
         <button class="linkbtn" id="logout">Log out</button>
       </header>
+      ${tabsHtml()}
       ${payBox}
       <div id="msg2"></div>
       ${seenHowTo() ? "" : `<div class="card howto">
@@ -276,6 +279,7 @@ async function render() {
       <div id="admin"></div>`;
 
     $("#logout").onclick = logOut;
+    bindTabs();
     $("#plain-toggle").onchange = (e) => { setPlain(e.target.checked); render(); };
     if ($("#howto-ok")) $("#howto-ok").onclick = () => { setHowTo(); render(); };
     document.querySelectorAll(".game[data-lock='0']").forEach(attachSwipe);
@@ -302,6 +306,94 @@ async function submitSurvivor(week, team) {
   } catch (err) { flash(err.message, false, "#msg2"); }
 }
 
+// ---------- Tabs: Picks, Payouts, News ----------
+const VIEWS = [["picks", "Picks"], ["payouts", "Payouts"], ["news", "News"]];
+function tabsHtml() {
+  return `<nav class="tabs">${VIEWS.map(([k, l]) => `<button type="button" data-view="${k}" class="${view === k ? "on" : ""}">${l}</button>`).join("")}</nav>`;
+}
+function bindTabs() {
+  document.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => { view = b.dataset.view; render(); });
+}
+
+// Payouts and news are their own screens; picks keeps the full home page above.
+async function renderSection() {
+  const header = `<header class="top"><div><h1>🌭 Hotdawgs NFL Pool</h1><p class="hint">Hi ${esc(me.name)}</p></div><button class="linkbtn" id="logout">Log out</button></header>${tabsHtml()}`;
+  let body;
+  try { body = view === "payouts" ? await payoutsHtml() : await newsHtml(); }
+  catch (err) { body = `<p class="err">${esc(err.message)}</p>`; }
+  $("#home-body").innerHTML = header + `<div>${body}</div>`;
+  $("#logout").onclick = logOut;
+  bindTabs();
+}
+
+// Best-guess payouts: a flat amount for each week's pick'em winner, and a bigger survivor prize.
+// Winners are worked out from the final results. Ties split the weekly prize.
+async function payoutsHtml() {
+  const s = settings;
+  const [games, picks] = await Promise.all([
+    sb.from("nfl_games").select("*").order("start_at"),
+    rpc("nfl_picks_visible", { p_token: token() })
+  ]);
+  if (games.error) throw games.error;
+  const all = games.data;
+  const weekly = Number(s.weekly_prize) || 0;
+  const pot = s.paid_count * (Number(s.entry_fee) || 0);
+  const start = Number(s.season_start_week) || 1;
+
+  const weekRows = [];
+  for (let w = start; w <= 18; w++) {
+    const wg = all.filter((g) => g.week === w);
+    if (!wg.length) { weekRows.push(`<div class="card pay"><b>Week ${w}</b><div class="hint">Not posted yet · $${weekly} to the weekly winner(s)</div></div>`); continue; }
+    const done = wg.every((g) => g.status === "final");
+    const tally = {};
+    for (const p of picks) {
+      const g = wg.find((x) => x.id === p.game_id);
+      const c = g && covered(g);
+      if (!c) continue;
+      tally[p.player] = tally[p.player] || 0;
+      if (c !== "push" && c === p.side) tally[p.player]++;
+    }
+    const best = Math.max(0, ...Object.values(tally));
+    const winners = Object.keys(tally).filter((n) => tally[n] === best && best > 0);
+    const each = winners.length ? (weekly / winners.length).toFixed(2) : null;
+    const status = done
+      ? (winners.length ? `${best} right · ${winners.map(esc).join(", ")} · $${each} each` : "No picks scored")
+      : "Games still in progress";
+    weekRows.push(`<div class="card pay"><b>Week ${w}</b><div class="hint">${status}</div></div>`);
+  }
+
+  const note = s.test_season && start > 1
+    ? `<div class="card warn"><b>Test season:</b> weeks 1 to ${start - 1} have no picks and no payouts.</div>`
+    : "";
+  return `
+    <h2>Payouts</h2>
+    <div class="card">
+      <b>Pot so far:</b> ${s.paid_count} paid × $${esc(s.entry_fee)} = <b>$${pot}</b>
+      <div class="hint">Weekly winner: <b>$${weekly}</b> each week · Survivor winner: <b>$${esc(s.survivor_prize)}</b></div>
+    </div>
+    ${note}
+    <h2>Weekly pick'em</h2>
+    ${weekRows.join("")}
+    <h2>Survivor</h2>
+    <div class="card pay"><b>Survivor winner: $${esc(s.survivor_prize)}</b><div class="hint">Survivor elimination isn't tracked yet, so the winner shows here once it is.</div></div>`;
+}
+
+// Injuries and news, filled by the news feed job (not connected yet).
+async function newsHtml() {
+  const { data, error } = await sb.from("nfl_news").select("*").order("published_at", { ascending: false }).limit(40);
+  if (error) throw error;
+  if (!data.length) {
+    return `<h2>Injuries & news</h2><div class="card"><p class="hint">Nothing posted yet. Injury reports and headlines will show up here once the news feed is connected.</p></div>`;
+  }
+  const items = data.map((n) => `
+    <div class="card news-item">
+      <span class="tag ${n.kind}">${n.kind === "injury" ? "Injury" : "News"}</span>${n.team ? ` <b>${esc(n.team)}</b>` : ""}
+      <h3>${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.headline)}</a>` : esc(n.headline)}</h3>
+      ${n.summary ? `<p class="hint">${esc(n.summary)}</p>` : ""}
+    </div>`).join("");
+  return `<h2>Injuries & news</h2>${items}`;
+}
+
 // ---------- Commissioner: who has paid ----------
 async function renderAdmin() {
   const box = $("#admin");
@@ -315,6 +407,10 @@ async function renderAdmin() {
         <input type="text" id="s-venmo" autocapitalize="none" value="${esc(settings.venmo_handle)}">
         <label for="s-fee">Entry fee ($)</label>
         <input type="text" id="s-fee" inputmode="decimal" value="${esc(settings.entry_fee)}">
+        <label for="s-weekly">Weekly prize, each week ($)</label>
+        <input type="text" id="s-weekly" inputmode="decimal" value="${esc(settings.weekly_prize)}">
+        <label for="s-survivor">Survivor prize ($)</label>
+        <input type="text" id="s-survivor" inputmode="decimal" value="${esc(settings.survivor_prize)}">
         <label for="s-invite">Group password (new players need it to join)</label>
         <input type="text" id="s-invite" autocomplete="off" autocapitalize="none" placeholder="Leave blank to keep the current one">
         <button class="btn" id="s-save" type="button">Save settings</button>
@@ -344,9 +440,13 @@ async function saveSettings() {
   const venmo = $("#s-venmo").value.trim();
   const fee = $("#s-fee").value.trim();
   const invite = $("#s-invite").value.trim();
+  const weekly = $("#s-weekly").value.trim();
+  const survivor = $("#s-survivor").value.trim();
   try {
     if (venmo !== settings.venmo_handle) await rpc("nfl_admin_set_config", { p_token: t, p_key: "venmo_handle", p_value: venmo });
     if (fee !== settings.entry_fee) await rpc("nfl_admin_set_config", { p_token: t, p_key: "entry_fee", p_value: fee });
+    if (weekly !== settings.weekly_prize) await rpc("nfl_admin_set_config", { p_token: t, p_key: "weekly_prize", p_value: weekly });
+    if (survivor !== settings.survivor_prize) await rpc("nfl_admin_set_config", { p_token: t, p_key: "survivor_prize", p_value: survivor });
     if (invite) await rpc("nfl_admin_set_config", { p_token: t, p_key: "invite", p_value: invite });
     const s = await rpc("nfl_settings");
     if (s && s[0]) settings = s[0];
