@@ -1,6 +1,6 @@
-// The egg beer: after you log in, a raw egg drops into a beer and the beer gets chugged.
-// Copied from the Hotdawgs golf pool; only the captions differ.
-// About 3.5 seconds. Tap anywhere to skip. Respects "Reduce Motion".
+// The NFL version of the egg beer: a football drops into a beer, the beer gets chugged,
+// and a big splash says TOUCHDOWN! Plays every time the app opens while logged in.
+// About 4.3 seconds. Tap anywhere to skip. Respects "Reduce Motion".
 
 (function () {
   const style = document.createElement("style");
@@ -22,7 +22,12 @@
       100% { transform: translateY(78px) rotate(10deg); opacity: 0; } }
     /* Splash and the yolk sinking */
     .egg-splash { opacity: 0; transform-box: fill-box; transform-origin: center bottom; animation: eggSplash .5s ease-out .82s forwards; }
-    @keyframes eggSplash { 0% { opacity: 1; transform: scale(.3); } 100% { opacity: 0; transform: scale(1.5) translateY(-14px); } }
+    @keyframes eggSplash { 0% { opacity: 1; transform: scale(.3); } 100% { opacity: 0; transform: scale(2.6) translateY(-18px); } }
+    /* The TOUCHDOWN! burst, popping in right after the splash */
+    .egg-td { opacity: 0; font-family: Rockwell, Georgia, serif; font-weight: 900; font-size: 27px; fill: #D92B2B;
+      stroke: #fff6e3; stroke-width: 7px; paint-order: stroke; text-anchor: middle;
+      transform-box: fill-box; transform-origin: center; animation: eggTD .5s cubic-bezier(.2,1.6,.4,1) .9s forwards; }
+    @keyframes eggTD { 0% { opacity: 0; transform: scale(.2) rotate(-8deg); } 100% { opacity: 1; transform: scale(1) rotate(-6deg); } }
     .egg-yolk { opacity: 0; animation: eggYolk 1.2s ease-in .85s forwards; }
     @keyframes eggYolk { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 1; transform: translateY(56px); } }
     /* 1.4–3.1s: tilt and chug */
@@ -62,7 +67,10 @@
           <rect x="40" y="86" width="120" height="170" fill="url(#eggShine)" opacity=".35"/>
           <g fill="#fff3c4"><circle class="egg-bub" cx="80" cy="220" r="3"/><circle class="egg-bub" cx="112" cy="200" r="2.5"/><circle class="egg-bub" cx="96" cy="230" r="2"/></g>
           <path d="M44 88 Q60 70 76 84 Q92 66 108 82 Q124 66 140 84 Q152 74 158 88 L158 100 L44 100 Z" fill="#fffaf0"/>
-          <g class="egg-yolk"><circle cx="102" cy="110" r="11" fill="#ffb300"/><circle cx="98" cy="106" r="3" fill="#fff4b0"/></g>
+          <g class="egg-yolk">
+            <ellipse cx="102" cy="110" rx="15" ry="9" transform="rotate(-25 102 110)" fill="#8B4513" stroke="#3a2a1a" stroke-width="1.5"/>
+            <path d="M94 116 L110 104 M97 113 L100 110 M103 107 L106 104 M99 108 L103 112" stroke="#fff" stroke-width="1.6" stroke-linecap="round" transform="rotate(-25 102 110)"/>
+          </g>
         </g>
       </g>
       <defs><linearGradient id="eggShine" x1="0" x2="1"><stop offset="0" stop-color="#fff"/><stop offset=".3" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
@@ -74,6 +82,7 @@
     </g>
     <g class="egg-egg"><ellipse cx="102" cy="40" rx="17" ry="22" fill="#fffdf7" stroke="#3a2a1a" stroke-width="4"/>
       <ellipse cx="96" cy="32" rx="5" ry="7" fill="#fff" opacity=".9"/></g>
+    <text class="egg-td" x="100" y="34">TOUCHDOWN!</text>
     <text class="egg-gulp" x="150" y="30">GLUG</text>
     <text class="egg-gulp" x="0" y="20" style="animation-delay:2.3s">GLUG</text>
   </svg>`;
@@ -84,7 +93,7 @@
     ov.className = "egg-ov";
     ov.setAttribute("role", "dialog");
     ov.setAttribute("aria-label", "Welcome animation. Tap to skip.");
-    ov.innerHTML = SVG + `<div class="egg-cap">Egg beer time${name ? ", " + name : ""}! 🥚🍺</div><div class="egg-sub">Tap to skip</div>`;
+    ov.innerHTML = SVG + `<div class="egg-cap">Touchdown${name ? ", " + name : ""}! 🏈🍺</div><div class="egg-sub">Tap to skip</div>`;
     document.body.appendChild(ov);
     const cap = ov.querySelector(".egg-cap");
     const t1 = setTimeout(() => { cap.textContent = "Chug! Chug! Chug!"; }, 1500);

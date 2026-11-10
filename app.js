@@ -15,7 +15,11 @@ const clearToken = () => { try { localStorage.removeItem(SES); } catch (e) {} };
 
 async function rpc(fn, args) {
   const { data, error } = await sb.rpc(fn, args);
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Logins last one hour; when one expires, send the player back to the log-in screen
+    if (/log in again/i.test(error.message)) { clearToken(); location.reload(); }
+    throw new Error(error.message);
+  }
   return data;
 }
 
@@ -51,7 +55,7 @@ async function init() {
   if (t) {
     try {
       const r = await rpc("nfl_me", { p_token: t });
-      if (r && r.length) { me = r[0]; return enter(false); }
+      if (r && r.length) { me = r[0]; return enter(); }
     } catch (e) { /* fall through to login */ }
   }
   clearToken();
@@ -65,7 +69,7 @@ async function onLogin(e) {
     const t = await rpc("nfl_login", { p_name: $("#l-name").value, p_pass: $("#l-pass").value });
     setToken(t);
     me = (await rpc("nfl_me", { p_token: t }))[0];
-    enter(true);
+    enter();
   } catch (err) { flash(err.message); }
 }
 
@@ -82,14 +86,15 @@ async function onJoin(e) {
     });
     setToken(t);
     me = (await rpc("nfl_me", { p_token: t }))[0];
-    enter(true);
+    enter();
   } catch (err) { flash(err.message); }
 }
 
-function enter(justLoggedIn) {
+// The egg beer plays every time the app opens while you're logged in.
+function enter() {
   show("home");
   render();
-  if (justLoggedIn && window.HD && HD.eggBeer) HD.eggBeer(me.name);
+  if (window.HD && HD.eggBeer) HD.eggBeer(me.name);
 }
 
 function logOut() {
@@ -177,6 +182,10 @@ function currentWeek(games) {
 async function render() {
   const t = token();
   try {
+    // Check the login hasn't run out (one hour) before showing picks
+    const still = await rpc("nfl_me", { p_token: t });
+    if (!still.length) { clearToken(); return location.reload(); }
+
     const [games, picks, surv] = await Promise.all([
       sb.from("nfl_games").select("*").order("start_at"),
       rpc("nfl_picks_visible", { p_token: t }),
@@ -225,7 +234,7 @@ async function render() {
         : started(g) ? "" : `<div class="kick">Locks in ${fmtLeft(Date.parse(g.start_at) - Date.now())} · ${fmtKick(g)}</div>`;
       const reveal = revealHtml(g);
       const plain = plainOn();
-      const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${esc(abbr)}${plain && plainSide(g, side) ? `<small>${esc(plainSide(g, side))}</small>` : ""}</button>`;
+      const btn = (side, abbr) => `<button class="pickbtn ${pick === side ? "on" : ""}" data-game="${esc(g.id)}" data-side="${side}" ${lock ? "disabled" : ""}>${pick === side ? "🌭 " : ""}${esc(abbr)}${plain && plainSide(g, side) ? `<small>${esc(plainSide(g, side))}</small>` : ""}</button>`;
       return `<div class="game" data-gid="${esc(g.id)}" data-lock="${lock ? 1 : 0}">
         <div class="spread">${esc(plain ? plainSpread(g) : spreadText(g))}</div>
         <div class="teams">${btn("away", g.away)}<span>@</span>${btn("home", g.home)}</div>
@@ -239,12 +248,12 @@ async function render() {
       const used = usedElsewhere.has(tm);
       const g = wg.find((x) => x.home === tm || x.away === tm);
       const lock = !me.paid || (g && started(g));
-      return `<button class="teambtn ${survThisWeek === tm ? "on" : ""}" data-team="${esc(tm)}" ${used || lock ? "disabled" : ""}>${esc(tm)}${used ? " ✕" : ""}</button>`;
+      return `<button class="teambtn ${survThisWeek === tm ? "on" : ""}" data-team="${esc(tm)}" ${used || lock ? "disabled" : ""}>${survThisWeek === tm ? "🏈 " : ""}${esc(tm)}${used ? " 🥚" : ""}</button>`;
     }).join("") || `<p class="hint">No games posted yet.</p>`;
 
     $("#home-body").innerHTML = `
       <header class="top">
-        <div><h1>Hotdawgs NFL Pool</h1><p class="hint">Hi ${esc(me.name)} · pick'em record ${won}-${lost}${pushed ? `-${pushed}` : ""}</p></div>
+        <div><h1>🌭 Hotdawgs NFL Pool</h1><p class="hint">Hi ${esc(me.name)} · pick'em record ${won}-${lost}${pushed ? `-${pushed}` : ""}</p></div>
         <button class="linkbtn" id="logout">Log out</button>
       </header>
       ${payBox}
