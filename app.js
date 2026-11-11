@@ -99,6 +99,17 @@ async function onJoin(e) {
 function enter() {
   show("home");
   render();
+  // Commissioners get a menu shortcut that jumps to the invite section
+  if (me.is_admin && !$("#inv-menu")) {
+    $("#drawer-nav").insertAdjacentHTML("beforeend", `<button type="button" id="inv-menu">＋ Invite players</button>`);
+    $("#inv-menu").onclick = () => {
+      closeDrawer();
+      view = "picks";
+      paintNav();
+      render();
+      setTimeout(() => $("#inv-make")?.scrollIntoView({ behavior: "smooth", block: "center" }), 1200);
+    };
+  }
   if (window.HD && HD.eggBeer) HD.eggBeer(me.name);
 }
 
