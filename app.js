@@ -24,7 +24,7 @@ async function rpc(fn, args) {
 }
 
 let me = null;
-let settings = { venmo_handle: "", entry_fee: "", weekly_prize: "0", survivor_prize: "0", season_start_week: 1, test_season: false, paid_count: 0, announcement: "" };
+let settings = { venmo_handle: "", entry_fee: "", weekly_prize: "0", survivor_prize: "0", season_start_week: 1, test_season: false, paid_count: 0, announcement: "", require_payment: false };
 let view = "picks"; // picks | payouts | news
 
 // ---------- Screens ----------
@@ -241,14 +241,14 @@ async function render() {
       if (c === "push") pushed++; else if (c === p.side) won++; else lost++;
     }
 
-    const payBox = me.paid ? "" : `
+    const payBox = me.paid || !settings.require_payment ? "" : `
       <div class="card warn">
         <b>Entry: $${esc(settings.entry_fee)}</b> to <b>${esc(settings.venmo_handle)}</b> on Venmo.
         You can make picks once the commissioner marks you paid.
       </div>`;
 
     const pickRows = wg.map((g) => {
-      const lock = started(g) || !me.paid || !g.line_locked;
+      const lock = started(g) || (settings.require_payment && !me.paid) || !g.line_locked;
       const pick = myPicks[g.id];
       const score = g.status === "final" || g.status === "in_progress"
         ? `<div class="score">${esc(g.away)} ${g.away_score ?? 0} – ${esc(g.home)} ${g.home_score ?? 0}${g.status === "final" ? " (final)" : ""}</div>`
@@ -280,7 +280,7 @@ async function render() {
     const survRows = teams.map((tm) => {
       const used = usedElsewhere.has(tm);
       const g = wg.find((x) => x.home === tm || x.away === tm);
-      const lock = !me.paid || (g && started(g));
+      const lock = (settings.require_payment && !me.paid) || (g && started(g));
       return `<button class="teambtn ${survThisWeek === tm ? "on" : ""}" data-team="${esc(tm)}" ${used || lock ? "disabled" : ""}>${survThisWeek === tm ? "🏈 " : ""}${esc(tm)}${used ? " 🥚" : ""}</button>`;
     }).join("") || `<p class="hint">No games posted yet.</p>`;
 
