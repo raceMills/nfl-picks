@@ -99,17 +99,6 @@ async function onJoin(e) {
 function enter() {
   show("home");
   render();
-  // Commissioners get a menu shortcut that jumps to the invite section
-  if (me.is_admin && !$("#inv-menu")) {
-    $("#drawer-nav").insertAdjacentHTML("beforeend", `<button type="button" id="inv-menu">＋ Invite players</button>`);
-    $("#inv-menu").onclick = () => {
-      closeDrawer();
-      view = "picks";
-      paintNav();
-      render();
-      setTimeout(() => $("#inv-make")?.scrollIntoView({ behavior: "smooth", block: "center" }), 1200);
-    };
-  }
   if (window.HD && HD.eggBeer) HD.eggBeer(me.name);
 }
 
@@ -348,7 +337,7 @@ async function submitSurvivor(week, team) {
 }
 
 // ---------- Tabs: Picks, Payouts, News ----------
-const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payouts"], ["news", "News"], ["chat", "Chat"], ["profile", "Profile"]];
+const VIEWS = [["picks", "Picks"], ["standings", "Standings"], ["payouts", "Payouts"], ["news", "News"], ["chat", "Chat"], ["invite", "Invite"], ["profile", "Profile"]];
 function tabsHtml() {
   return `<nav class="tabs">${VIEWS.map(([k, l]) => `<button type="button" data-view="${k}" class="${view === k ? "on" : ""}">${l}</button>`).join("")}</nav>`;
 }
@@ -375,6 +364,7 @@ async function renderSection() {
   await loadProfiles();
   try {
     body = view === "profile" ? profileHtml()
+      : view === "invite" ? inviteHtml()
       : view === "payouts" ? await payoutsHtml()
       : view === "standings" ? await standingsHtml()
       : view === "chat" ? await chatHtml()
@@ -385,6 +375,7 @@ async function renderSection() {
   bindTabs();
   if (view === "chat") bindChat();
   if (view === "profile") bindProfile();
+  if (view === "invite") bindInvite();
 }
 
 // ---------- Pool chat ----------
@@ -859,6 +850,24 @@ function showInvite(code) {
   $("#inv-copy").onclick = () => copyText(url);
 }
 
+// The Invite screen: any player can make a link; each player sees the links they made.
+function inviteHtml() {
+  return `
+    <h2>Invite players</h2>
+    <div class="card">
+      <p class="hint">Makes a link that lasts 7 days and works for up to 10 sign-ups. New players fill in the join form for you.</p>
+      <button class="btn" id="inv-make" type="button">Create invite link</button>
+      <div id="inv-out"></div>
+      <h2>Your active links</h2>
+      <div id="inv-list"><p class="hint">Loading…</p></div>
+    </div>`;
+}
+
+function bindInvite() {
+  $("#inv-make").onclick = makeInvite;
+  loadInvites();
+}
+
 async function makeInvite() {
   try {
     const code = await rpc("nfl_create_invite", { p_token: token() });
@@ -955,19 +964,10 @@ async function renderAdmin() {
     });
     $("#s-save").onclick = saveSettings;
     $("#csv-btn").onclick = exportCsv;
-    $("#inv-make").onclick = makeInvite;
-    loadInvites();
 
     // Recent commissioner activity
     const log = await rpc("nfl_admin_audit", { p_token: token() });
     box.insertAdjacentHTML("beforeend", `
-      <h2>Invite players</h2>
-      <div class="card">
-        <p class="hint">Makes a link that lasts 7 days and works for up to 10 sign-ups. New players fill in the join form for you.</p>
-        <button class="btn" id="inv-make" type="button">Create invite link</button>
-        <div id="inv-out"></div>
-        <div id="inv-list"><p class="hint">Loading…</p></div>
-      </div>
       <h2>Commissioner · Activity</h2>
       <div class="card">${log.map((a) => `<div class="srow"><span class="hint">${new Date(a.logged_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" })}</span><span>${esc(a.actor)} ${esc(a.action)}${a.detail ? `: ${esc(a.detail)}` : ""}</span></div>`).join("") || `<p class="hint">No activity yet.</p>`}</div>`);
   } catch (err) { box.innerHTML = ""; }
